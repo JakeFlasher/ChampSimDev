@@ -211,24 +211,28 @@ class ZEN4 final : public IAddrMapper, public Implementation {
       //sanity check, check that we don't map into ourselves anywhere
       Request R(268435456,0,0,nullptr);
       int groups = 128;
-      bool bitmap[groups];
-      for(int i = 0; i < groups; i++)
+      bool bitmap[groups*2];
+      for(int i = 0; i < groups * 2; i++)
         bitmap[i] = false;
       for(int i = 0; i < groups; i++)
       {
-        R.addr = 268435456 + i;
+        R.addr = 268435456 + i*tx_bytes;
         apply(R);
         int rank_num = R.addr_vec[m_dram->m_levels("rank")];
         int bg_num = R.addr_vec[m_dram->m_levels("bankgroup")];
         int bank_num = R.addr_vec[m_dram->m_levels("bank")];
         int channel_num = R.addr_vec[m_dram->m_levels("channel")];
-
+        int column_num = R.addr_vec[m_dram->m_levels("column")];
         int index = bank_num;
         index |= (bg_num << m_addr_bits[m_dram->m_levels("bank")]);
         index |= (rank_num << (m_addr_bits[m_dram->m_levels("bank")] + m_addr_bits[m_dram->m_levels("bankgroup")]));
         index |= (channel_num << (m_addr_bits[m_dram->m_levels("bank")] + m_addr_bits[m_dram->m_levels("bankgroup")]) + m_addr_bits[m_dram->m_levels("rank")]);
-        assert(!bitmap[index]);
-        bitmap[index] = true;
+        if(bitmap[index+(column_num*groups)]) {
+          fmt::print("addr: {} index: {} column: {} assert: {}\n",R.addr,index, column_num,!bitmap[index+(column_num*groups)]);
+          std::abort();
+        }
+        
+        bitmap[index+(column_num*groups)] = true;
       }
     }
 
