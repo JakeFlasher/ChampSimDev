@@ -46,7 +46,6 @@ uint32_t spp_raf_l2c::prefetcher_cache_operate(champsim::address addr, champsim:
 
   FILTER.raf_bloom_reset(addr);
 
-  FILTER.set_trow_table(addr);
 
   typename spp_raf_l2c::offset_type::difference_type delta = 0;
   std::vector<typename spp_raf_l2c::offset_type::difference_type> delta_q(intern_->get_mshr_size());
@@ -431,24 +430,12 @@ bool spp_raf_l2c::PREFETCH_FILTER::raf_bloom_check(champsim::address pf_addr) {
 }
 
 bool spp_raf_l2c::PREFETCH_FILTER::raf_check(champsim::address pf_addr, unsigned long confidence) {
-  if(confidence > TRAF_THRESHOLD)
-    return(!(check_row_table(pf_addr) || check_trow_table(pf_addr)));
-  else
-    return(!check_row_table(pf_addr));
+  return(!check_row_table(pf_addr));
 }
 
 bool spp_raf_l2c::PREFETCH_FILTER::check_row_table(champsim::address pf_addr) {
   auto row = row_table.check_hit(row_table_entry{raf_bloom_rb(pf_addr),MEMORY_CONTROLLER::DRAM_CONTROLLER.value()->dram_get_row(pf_addr)});
   return(row.has_value());
-}
-
-bool spp_raf_l2c::PREFETCH_FILTER::check_trow_table(champsim::address pf_addr) {
-  auto row = trow_table.check_hit(row_table_entry{raf_bloom_rb(pf_addr),MEMORY_CONTROLLER::DRAM_CONTROLLER.value()->dram_get_row(pf_addr)});
-  return(row.has_value());
-}
-
-void spp_raf_l2c::PREFETCH_FILTER::set_trow_table(champsim::address pf_addr) {
-  trow_table.fill(row_table_entry{raf_bloom_rb(pf_addr),MEMORY_CONTROLLER::DRAM_CONTROLLER.value()->dram_get_row(pf_addr)});
 }
 
 void spp_raf_l2c::PREFETCH_FILTER::set_row_table(champsim::address pf_addr) {

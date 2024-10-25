@@ -17,39 +17,35 @@ class hashed_perceptron : champsim::modules::branch_predictor
   constexpr static int MINHIST = 3;                  // minimum history length (for table 1; table 0 is biases)
   constexpr static std::size_t TABLE_SIZE = 1 << 12; // 12-bit indices for the tables
   constexpr static champsim::data::bits TABLE_INDEX_BITS{champsim::msl::lg2(TABLE_SIZE)};
-  constexpr static std::size_t NGHIST_WORDS = MAXHIST / champsim::msl::lg2(TABLE_SIZE) + 1; // this many 12-bit words will be kept in the global history
   constexpr static int THRESHOLD = 1;
 
   constexpr static std::array<unsigned long, NTABLES> history_lengths = {0,  3,  4,  6,  8,  10,  14,  19,
                                                                          26, 36, 49, 67, 91, 125, 170, MAXHIST}; // geometric global history lengths
 
   // tables of 8-bit weights
-  std::vector<std::array<champsim::msl::sfwcounter<8>, TABLE_SIZE>> tables = [] {
-    decltype(tables) retval;
-    std::generate_n(std::back_inserter(retval), std::size(history_lengths), [] { return typename decltype(retval)::value_type{}; });
-    return retval;
-  }(); // immediately invoked
+  std::array<std::array<champsim::msl::sfwcounter<8>, TABLE_SIZE>, NTABLES> tables{};
 
-  using ghist_type = std::array<unsigned long long, NGHIST_WORDS>;
-  ghist_type ghist_words = {}; // words that store the global history
+  public:
+  class global_history {
+    using value_type = unsigned long long;
+    constexpr static int WORD_LEN = champsim::msl::lg2(TABLE_SIZE);
+    constexpr static int NUM_WORDS_PER_VALUE = std::numeric_limits<value_type>::digits / WORD_LEN; // this many 12-bit words will be kept per int in the table in the global history
+    constexpr static int VALUE_LEN = WORD_LEN * NUM_WORDS_PER_VALUE;
+    constexpr static std::size_t NGHIST_WORDS = MAXHIST / VALUE_LEN + 1;
+    std::array<value_type, NGHIST_WORDS> words;
+
+    constexpr static value_type VALUE_MASK = champsim::msl::bitmask(champsim::data::bits{VALUE_LEN});
+    public:
+
+    std::size_t index_to_length(std::size_t hist_len) const;
+    void push_back(bool taken);
+  };
+
+  private:
+  global_history ghist_words = {}; // words that store the global history
 
   int theta = 10;
   int tc = 0; // counter for threshold setting algorithm
-
-  class indexer
-  {
-    ghist_type hist_masks;
-
-  public:
-    explicit indexer(unsigned long hist_len);
-    std::size_t get_index(champsim::address pc, ghist_type ghist_words) const;
-  };
-
-  std::vector<indexer> indexers = [] {
-    decltype(indexers) retval;
-    std::transform(std::begin(history_lengths), std::end(history_lengths), std::back_inserter(retval), [](unsigned long len) { return indexer{len}; });
-    return retval;
-  }(); // immediately invoked
 
   struct perceptron_result {
     std::array<uint64_t, std::tuple_size_v<decltype(history_lengths)>> indices = {}; // remember the indices into the tables from prediction to update

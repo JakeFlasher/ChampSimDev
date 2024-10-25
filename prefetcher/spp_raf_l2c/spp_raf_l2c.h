@@ -47,9 +47,7 @@ class spp_raf_l2c : public champsim::modules::prefetcher {
   //Table and guess approach
   constexpr static unsigned RAF_SETS = 128;
   constexpr static unsigned RAF_WAYS = 1;
-  constexpr static unsigned TRAF_THRESHOLD = 70;
-  constexpr static unsigned TRAF_SETS = 128;
-  constexpr static unsigned TRAF_WAYS = 1;
+  constexpr static unsigned RAF_THRESHOLD = 85;
 
   // Global register parameters
   constexpr static unsigned GLOBAL_COUNTER_BIT = 10;
@@ -148,8 +146,6 @@ class spp_raf_l2c : public champsim::modules::prefetcher {
 
     champsim::msl::lru_table<row_table_entry,row_set_indexer,row_way_indexer> row_table{RAF_SETS,RAF_WAYS};
 
-    champsim::msl::lru_table<row_table_entry,row_set_indexer,row_way_indexer> trow_table{TRAF_SETS,TRAF_WAYS};
-
     PREFETCH_FILTER()
     {
       for (uint32_t set = 0; set < FILTER_SET; set++) {
@@ -162,7 +158,7 @@ class spp_raf_l2c : public champsim::modules::prefetcher {
           raf_bloom_filter[e][e2] = 0;
     }
 
-    bool check(champsim::address pf_addr, FILTER_REQUEST filter_request, unsigned int confidence = 100);
+    bool check(champsim::address pf_addr, FILTER_REQUEST filter_request, unsigned int confidence = 0);
 
     unsigned int raf_bloom_hash(champsim::address pf_addr);
     unsigned int raf_bloom_rb(champsim::address pf_addr);
@@ -175,8 +171,6 @@ class spp_raf_l2c : public champsim::modules::prefetcher {
     //row table
     void set_row_table(champsim::address pf_addr);
     bool check_row_table(champsim::address pf_addr);
-    void set_trow_table(champsim::address pf_addr);
-    bool check_trow_table(champsim::address pf_addr);
   };
 
   class GLOBAL_REGISTER

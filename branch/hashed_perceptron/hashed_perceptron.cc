@@ -49,37 +49,29 @@ sources for you to plagiarize.
 
 #include <numeric>
 
-hashed_perceptron::indexer::indexer(unsigned long hist_len)
+std::size_t hashed_perceptron::global_history::index_to_length(std::size_t hist_len) const
 {
-  const auto lg2_table_size = champsim::msl::lg2(TABLE_SIZE);
-  const auto most_words = hist_len / lg2_table_size;               // most of the words are 12 bits long
-  const champsim::data::bits last_word{hist_len % lg2_table_size}; // the last word is fewer than 12 bits
+  const auto most_words = hist_len / VALUE_LEN;               // most of the words are `VALUE_LEN` bits long
+  const auto last_word_mask{champsim::msl::bitmask(champsim::data::bits{hist_len % VALUE_LEN})}; // the last word is fewer than `VALUE_LEN` bits
 
-  std::fill_n(std::begin(hist_masks), most_words, champsim::msl::bitmask(champsim::data::bits{lg2_table_size}));
-  hist_masks.at(most_words) = champsim::msl::bitmask(last_word);
-}
+  // XOR all of the entries together
+  auto joined_words = std::accumulate(std::begin(words), std::next(std::begin(words), static_cast<ptrdiff_t>(most_words)), words.at(most_words) & last_word_mask, std::bit_xor<>{});
 
-std::size_t hashed_perceptron::indexer::get_index(champsim::address pc, ghist_type ghist) const
-{
-  constexpr auto slice_width{champsim::msl::lg2(TABLE_SIZE)}; // NOTE: GCC 9 gives internal compiler error if this has type champsim::data::bits
-
-  // Mask the words in this table's history
-  std::transform(std::begin(ghist), std::end(ghist), std::begin(hist_masks), std::begin(ghist), std::bit_and<>{});
-
-  // XOR up to the next-to-the-last word
-  // seed in the PC to spread accesses around (like gshare) XOR in the last word
-  auto x = std::accumulate(std::begin(ghist), std::end(ghist), pc.slice_lower<champsim::data::bits{slice_width}>().to<uint64_t>(), std::bit_xor<>{});
-
-  return x & champsim::msl::bitmask(TABLE_INDEX_BITS); // stay within the table size
+  std::size_t result = 0;
+  for (int i = 0; i < NUM_WORDS_PER_VALUE; ++i) {
+    result ^= joined_words;
+    joined_words >>= WORD_LEN;
+  }
+  return result & champsim::msl::bitmask(TABLE_INDEX_BITS);
 }
 
 bool hashed_perceptron::predict_branch(champsim::address pc)
 {
-  auto get_index = [pc, ghist_words = ghist_words](const auto& idxer) {
-    return idxer.get_index(pc, ghist_words);
+  auto get_index = [ghist_words = ghist_words, pc_slice = pc.slice_lower<TABLE_INDEX_BITS>().to<uint64_t>()](auto idxer) {
+    return ghist_words.index_to_length(idxer) ^ pc_slice; // seed in the PC to spread accesses around (like gshare) XOR in the last word
   };
   perceptron_result result;
-  std::transform(std::cbegin(indexers), std::cend(indexers), std::begin(result.indices), get_index);
+  std::transform(std::cbegin(history_lengths), std::cend(history_lengths), std::begin(result.indices), get_index);
 
   // add the selected weights to the perceptron sum
   result.yout = std::inner_product(std::begin(tables), std::end(tables), std::begin(result.indices), 0, std::plus<>{},
@@ -88,23 +80,25 @@ bool hashed_perceptron::predict_branch(champsim::address pc)
   return result.yout >= THRESHOLD;
 }
 
+/**
+ *  Insert this branch outcome into the global history
+ **/
+void hashed_perceptron::global_history::push_back(bool taken)
+{
+  auto shift_words = [](value_type next_word, value_type last_word) -> value_type {
+    bool b = (last_word > VALUE_MASK); // get the MSB from the last word
+    return next_word | (b ? value_type{0x1} : value_type{0x0});
+  };
+
+  std::transform(std::cbegin(words), std::cend(words), std::begin(words), [](auto x) { return x << 1; });
+  std::adjacent_difference(std::cbegin(words), std::cend(words), std::begin(words), shift_words);
+  std::transform(std::cbegin(words), std::cend(words), std::begin(words), [](auto x){ return x & VALUE_MASK; }); // Remove MSBs that were shifted into the next word
+  words.front() |= taken ? value_type{0x1} : value_type{0x0};
+}
+
 void hashed_perceptron::last_branch_result(champsim::address pc, champsim::address branch_target, bool taken, uint8_t branch_type)
 {
-  // insert this branch outcome into the global history
-  auto shift_ghist_words = [](auto next_word, auto last_word) {
-    bool b = (last_word > champsim::msl::bitmask(TABLE_INDEX_BITS)); // get the MSB from the last word
-    return next_word | b;
-  };
-
-  // Remove MSBs that were shifted into the next word
-  auto mask_ghist_words = [](auto x) {
-    return x & champsim::msl::bitmask(TABLE_INDEX_BITS);
-  };
-
-  std::transform(std::cbegin(ghist_words), std::cend(ghist_words), std::begin(ghist_words), [](auto x) { return x << 1; });
-  std::adjacent_difference(std::cbegin(ghist_words), std::cend(ghist_words), std::begin(ghist_words), shift_ghist_words);
-  std::transform(std::cbegin(ghist_words), std::cend(ghist_words), std::begin(ghist_words), mask_ghist_words);
-  ghist_words[0] |= taken;
+  ghist_words.push_back(taken);
 
   // perceptron learning rule: train if misprediction or weak correct prediction
   bool prediction_correct = (taken == (last_result.yout >= THRESHOLD));
