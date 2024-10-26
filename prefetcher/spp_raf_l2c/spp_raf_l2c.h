@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <vector>
+#include <bitset>
 #include "msl/lru_table.h"
 #include "modules.h"
 #include "cache.h"
@@ -41,13 +42,18 @@ class spp_raf_l2c : public champsim::modules::prefetcher {
   constexpr static uint32_t FILL_THRESHOLD = 90;
   constexpr static uint32_t PF_THRESHOLD = 25;
   //BLACKIST LLC MISSES APPROACH
+  constexpr static unsigned DRAM_GROUPS = 128;
   constexpr static unsigned RAF_BF_ENTRIES = 32;
-  constexpr static unsigned RAF_RB_ENTRIES = 128;
+  constexpr static unsigned RAF_RB_ENTRIES = DRAM_GROUPS;
   constexpr static unsigned RAF_BF_THRESH = 1;
   //Table and guess approach
-  constexpr static unsigned RAF_SETS = 128;
+  constexpr static unsigned RAF_SETS = DRAM_GROUPS;
   constexpr static unsigned RAF_WAYS = 1;
   constexpr static unsigned RAF_THRESHOLD = 85;
+  //Row-access table
+  constexpr static unsigned RAM_SETS = 1;
+  constexpr static unsigned RAM_WAYS = 128;
+  constexpr static unsigned RAM_VECTOR = DRAM_GROUPS;
 
   // Global register parameters
   constexpr static unsigned GLOBAL_COUNTER_BIT = 10;
@@ -55,6 +61,7 @@ class spp_raf_l2c : public champsim::modules::prefetcher {
   constexpr static std::size_t MAX_GHR_ENTRY = 8;
 
 
+  uint64_t current_cycle = 0;
   public:
     static std::vector<spp_raf_l2c*> spp_impls;
 
@@ -132,10 +139,25 @@ class spp_raf_l2c : public champsim::modules::prefetcher {
 
     uint8_t raf_bloom_filter[RAF_RB_ENTRIES][RAF_BF_ENTRIES];
 
+    uint64_t filtered = 0;
+    uint64_t total = 0;
+
     struct row_table_entry {
       unsigned int bank_id;
       unsigned int row_id;
     };
+
+    struct ram_table_entry {
+      unsigned int row_id;
+
+      unsigned int first_used;
+
+      std::bitset<RAM_VECTOR> groups{};
+
+      ram_table_entry() : ram_table_entry(0,0) {}
+      explicit ram_table_entry(uint64_t row_id_, uint64_t first_used_) : row_id(row_id_), first_used(first_used_) {}
+    };
+
     //FOR ROW TABLE FILTER APPROACH
     struct row_set_indexer {
       auto operator()(const row_table_entry& entry) const { return entry.bank_id; }
@@ -144,7 +166,13 @@ class spp_raf_l2c : public champsim::modules::prefetcher {
       auto operator()(const row_table_entry& entry) const { return entry.row_id; }
     };
 
+    struct ram_indexer {
+      auto operator()(const ram_table_entry& entry) const { return entry.row_id; }
+    };
+
     champsim::msl::lru_table<row_table_entry,row_set_indexer,row_way_indexer> row_table{RAF_SETS,RAF_WAYS};
+
+    champsim::msl::lru_table<ram_table_entry,ram_indexer,ram_indexer> ram_table{RAM_SETS,RAM_WAYS};
 
     PREFETCH_FILTER()
     {
@@ -171,6 +199,10 @@ class spp_raf_l2c : public champsim::modules::prefetcher {
     //row table
     void set_row_table(champsim::address pf_addr);
     bool check_row_table(champsim::address pf_addr);
+
+    //ram table
+    void set_ram_table(champsim::address pf_addr);
+    bool check_ram_table(champsim::address pf_addr);
   };
 
   class GLOBAL_REGISTER

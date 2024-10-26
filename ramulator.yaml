@@ -26,7 +26,7 @@ MemorySystem:
   BHDRAMController:
     impl: BLISSDRAMController
     BHScheduler:
-      impl: BLISS
+      impl: BHScheduler
     RefreshManager:
       impl: AllBank
     RowPolicy:
@@ -39,7 +39,8 @@ MemorySystem:
           refresh_period: 32e-3,
           histogram_period: 500e-6 } 
       - ControllerPlugin: {
-          impl: BLISS }
+          impl: RFMManager,
+          rfm_thresh: 16}
 
   AddrMapper:
     impl: ZEN4

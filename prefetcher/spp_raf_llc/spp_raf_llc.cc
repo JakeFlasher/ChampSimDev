@@ -21,6 +21,13 @@ uint32_t spp_raf_llc::prefetcher_cache_operate(champsim::address addr, champsim:
       spp_l2c->FILTER.set_row_table(addr);
   }
 
+  //FOR RAM TABLE APPROACH
+  if(cache_hit == 0)
+  for(auto spp_l2c : spp_raf_l2c::spp_impls)
+  {
+      spp_l2c->FILTER.set_ram_table(addr);
+  }
+
   return metadata_in;
 }
 

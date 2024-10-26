@@ -165,6 +165,10 @@ public:
     return std::exchange(*hit, {}).data;
   }
 
+  block_vec_type get_contents() {
+    return(block);
+  }
+
   lru_table(std::size_t sets, std::size_t ways, SetProj set_proj, TagProj tag_proj)
       : set_projection(set_proj), tag_projection(tag_proj), NUM_SET(static_cast<diff_type>(sets)), NUM_WAY(static_cast<diff_type>(ways)), block(sets * ways)
   {

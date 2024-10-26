@@ -22,6 +22,10 @@ void spp_raf_l2c::prefetcher_initialize()
 
   std::cout << std::endl << "Initialize PREFETCH FILTER" << std::endl;
   std::cout << "FILTER_SET: " << FILTER_SET << std::endl;
+  std::cout << "RAF SETS: " << RAF_SETS << std::endl;
+  std::cout << "RAF WAYS: " << RAF_WAYS << std::endl;
+  std::cout << "RAM SETS: " << RAM_SETS << std::endl;
+  std::cout << "RAM WAYS: " << RAM_WAYS << std::endl << std::endl;
 
 
   //pass pointers
@@ -35,7 +39,7 @@ void spp_raf_l2c::prefetcher_initialize()
 
 }
 
-void spp_raf_l2c::prefetcher_cycle_operate() {}
+void spp_raf_l2c::prefetcher_cycle_operate() { current_cycle++;}
 
 
 uint32_t spp_raf_l2c::prefetcher_cache_operate(champsim::address addr, champsim::address ip, uint8_t cache_hit, bool useful_prefetch, access_type type, uint32_t metadata_in)
@@ -158,7 +162,18 @@ uint32_t spp_raf_l2c::prefetcher_cache_fill(champsim::address addr, long set, lo
   return metadata_in;
 }
 
-void spp_raf_l2c::prefetcher_final_stats() {}
+void spp_raf_l2c::prefetcher_final_stats() {
+
+  fmt::print("SPP-RAF:\n");
+  fmt::print("\tRAF FILTER %: {}\n",(FILTER.filtered / (double)FILTER.total) * 100.0);
+  fmt::print("\t---- FILTER CONTENTS ----\n");
+  for (auto i : FILTER.ram_table.get_contents()) {
+    if(i.last_used != 0) {
+      //there is data here
+      fmt::print("\t\tAGE: {} ROW: {} GROUPS: {}\n",current_cycle - i.data.first_used,i.data.row_id,i.data.groups.to_string());
+    }
+  }
+}
 
 
 // TODO: Find a good 64-bit hash function
@@ -412,25 +427,31 @@ void spp_raf_l2c::PATTERN_TABLE::read_pattern(uint32_t curr_sig, std::vector<typ
 
 void spp_raf_l2c::PREFETCH_FILTER::raf_bloom_mark(champsim::address pf_addr) {
   unsigned int hash = raf_bloom_hash(pf_addr);
-  unsigned int rb_id = raf_bloom_rb(pf_addr);
+  unsigned int rb_id = raf_bloom_rb(pf_addr) % RAF_RB_ENTRIES;
   if(raf_bloom_filter[rb_id][hash] < RAF_BF_THRESH)
     raf_bloom_filter[rb_id][hash]++;
 }
 
 void spp_raf_l2c::PREFETCH_FILTER::raf_bloom_reset(champsim::address pf_addr) {
   unsigned int hash = raf_bloom_hash(pf_addr);
-  unsigned int rb_id = raf_bloom_rb(pf_addr);
+  unsigned int rb_id = raf_bloom_rb(pf_addr) % RAF_RB_ENTRIES;
   raf_bloom_filter[rb_id][hash] = 0;
 }
 
 bool spp_raf_l2c::PREFETCH_FILTER::raf_bloom_check(champsim::address pf_addr) {
   unsigned int hash = raf_bloom_hash(pf_addr);
-  unsigned int rb_id = raf_bloom_rb(pf_addr);
+  unsigned int rb_id = raf_bloom_rb(pf_addr) % RAF_RB_ENTRIES;
   return(raf_bloom_filter[rb_id][hash] >= RAF_BF_THRESH);
 }
 
 bool spp_raf_l2c::PREFETCH_FILTER::raf_check(champsim::address pf_addr, unsigned long confidence) {
-  return(!check_row_table(pf_addr));
+
+  total++;
+
+  bool filter = confidence < 100 ? !check_ram_table(pf_addr) : false;
+  if(filter)
+    filtered++;
+  return(filter);
 }
 
 bool spp_raf_l2c::PREFETCH_FILTER::check_row_table(champsim::address pf_addr) {
@@ -442,17 +463,43 @@ void spp_raf_l2c::PREFETCH_FILTER::set_row_table(champsim::address pf_addr) {
   row_table.fill(row_table_entry{raf_bloom_rb(pf_addr),MEMORY_CONTROLLER::DRAM_CONTROLLER.value()->dram_get_row(pf_addr)});
 }
 
+bool spp_raf_l2c::PREFETCH_FILTER::check_ram_table(champsim::address pf_addr) {
+  auto row = ram_table.check_hit(ram_table_entry{MEMORY_CONTROLLER::DRAM_CONTROLLER.value()->dram_get_row(pf_addr),0});
+
+  if(row.has_value()) {
+    return(row->groups.test(raf_bloom_rb(pf_addr)));
+  }
+  else
+    return(true);
+}
+
+void spp_raf_l2c::PREFETCH_FILTER::set_ram_table(champsim::address pf_addr) {
+  auto row = ram_table.check_hit(ram_table_entry{MEMORY_CONTROLLER::DRAM_CONTROLLER.value()->dram_get_row(pf_addr),0});
+  
+  if(!row.has_value())
+    row = ram_table_entry{MEMORY_CONTROLLER::DRAM_CONTROLLER.value()->dram_get_row(pf_addr),_parent->current_cycle};
+
+  row->groups.set(raf_bloom_rb(pf_addr));
+  ram_table.fill(row.value());
+  
+}
+
 unsigned int spp_raf_l2c::PREFETCH_FILTER::raf_bloom_rb(champsim::address pf_addr) {
   std::size_t channel = MEMORY_CONTROLLER::DRAM_CONTROLLER.value()->dram_get_channel(pf_addr);
   std::size_t rank = MEMORY_CONTROLLER::DRAM_CONTROLLER.value()->dram_get_rank(pf_addr);
   std::size_t bank = MEMORY_CONTROLLER::DRAM_CONTROLLER.value()->dram_get_bank(pf_addr);
 
+  std::size_t ranks = MEMORY_CONTROLLER::DRAM_CONTROLLER.value()->channels[0].ranks();
+  std::size_t banks = MEMORY_CONTROLLER::DRAM_CONTROLLER.value()->channels[0].banks();
+
+  std::size_t rb_id = 0;
+        rb_id += bank;
+        rb_id += rank * banks;
+        rb_id += channel * ranks * banks;
   //id of which rowbuffer we hit
-  std::size_t rb_id = (channel *  MEMORY_CONTROLLER::DRAM_CONTROLLER.value()->channels[0].ranks() * MEMORY_CONTROLLER::DRAM_CONTROLLER.value()->channels[0].banks()) +
-                      (rank * (MEMORY_CONTROLLER::DRAM_CONTROLLER.value()->channels[0].banks())) + bank;
   
   //fmt::print("row buffer id = {}\n",rb_id % RAF_RB_ENTRIES);
-  return(rb_id % RAF_RB_ENTRIES);
+  return(rb_id);
 }
 
 unsigned int spp_raf_l2c::PREFETCH_FILTER::raf_bloom_hash(champsim::address pf_addr) {
