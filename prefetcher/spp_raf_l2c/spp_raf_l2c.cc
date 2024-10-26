@@ -50,6 +50,9 @@ uint32_t spp_raf_l2c::prefetcher_cache_operate(champsim::address addr, champsim:
 
   FILTER.raf_bloom_reset(addr);
 
+  if(type == access_type::LOAD)
+    FILTER.reset_nram_table(addr);
+
 
   typename spp_raf_l2c::offset_type::difference_type delta = 0;
   std::vector<typename spp_raf_l2c::offset_type::difference_type> delta_q(intern_->get_mshr_size());
@@ -167,10 +170,18 @@ void spp_raf_l2c::prefetcher_final_stats() {
   fmt::print("SPP-RAF:\n");
   fmt::print("\tRAF FILTER %: {}\n",(FILTER.filtered / (double)FILTER.total) * 100.0);
   fmt::print("\t---- FILTER CONTENTS ----\n");
-  for (auto i : FILTER.ram_table.get_contents()) {
+  /*for (auto i : FILTER.ram_table.get_contents()) {
     if(i.last_used != 0) {
       //there is data here
       fmt::print("\t\tAGE: {} ROW: {} GROUPS: {}\n",current_cycle - i.data.first_used,i.data.row_id,i.data.groups.to_string());
+    }
+  }*/
+  for (auto i : FILTER.nram_table.get_contents()) {
+    if(i.last_used != 0) {
+      //there is data here
+      fmt::print("\t\tGROUP: {} AGE: {} ROWS1: {}\n",i.data.bank_id,current_cycle - i.data.first_used,i.data.rows.to_string());
+      fmt::print("\t\t\t                  ROWS2: {}\n",i.data.rows_2.to_string());
+      fmt::print("\t\t\t                  ROWS3: {}\n",i.data.rows_3.to_string());
     }
   }
 }
@@ -426,20 +437,20 @@ void spp_raf_l2c::PATTERN_TABLE::read_pattern(uint32_t curr_sig, std::vector<typ
 }
 
 void spp_raf_l2c::PREFETCH_FILTER::raf_bloom_mark(champsim::address pf_addr) {
-  unsigned int hash = raf_bloom_hash(pf_addr);
+  unsigned int hash = raf_bloom_hash(pf_addr) % RAF_BF_ENTRIES;
   unsigned int rb_id = raf_bloom_rb(pf_addr) % RAF_RB_ENTRIES;
   if(raf_bloom_filter[rb_id][hash] < RAF_BF_THRESH)
     raf_bloom_filter[rb_id][hash]++;
 }
 
 void spp_raf_l2c::PREFETCH_FILTER::raf_bloom_reset(champsim::address pf_addr) {
-  unsigned int hash = raf_bloom_hash(pf_addr);
+  unsigned int hash = raf_bloom_hash(pf_addr) % RAF_BF_ENTRIES;
   unsigned int rb_id = raf_bloom_rb(pf_addr) % RAF_RB_ENTRIES;
   raf_bloom_filter[rb_id][hash] = 0;
 }
 
 bool spp_raf_l2c::PREFETCH_FILTER::raf_bloom_check(champsim::address pf_addr) {
-  unsigned int hash = raf_bloom_hash(pf_addr);
+  unsigned int hash = raf_bloom_hash(pf_addr) % RAF_BF_ENTRIES;
   unsigned int rb_id = raf_bloom_rb(pf_addr) % RAF_RB_ENTRIES;
   return(raf_bloom_filter[rb_id][hash] >= RAF_BF_THRESH);
 }
@@ -448,7 +459,7 @@ bool spp_raf_l2c::PREFETCH_FILTER::raf_check(champsim::address pf_addr, unsigned
 
   total++;
 
-  bool filter = confidence < 100 ? !check_ram_table(pf_addr) : false;
+  bool filter = confidence < 100 ? check_nram_table(pf_addr) : false;
   if(filter)
     filtered++;
   return(filter);
@@ -484,6 +495,59 @@ void spp_raf_l2c::PREFETCH_FILTER::set_ram_table(champsim::address pf_addr) {
   
 }
 
+bool spp_raf_l2c::PREFETCH_FILTER::check_nram_table(champsim::address pf_addr) {
+  auto group = nram_table.check_hit(ram_table_new_entry{raf_bloom_rb(pf_addr),0});
+
+  if(group.has_value()) {
+    return(group->rows.test(calc_nram_hash(pf_addr,1) % RAM_VECTOR) && group->rows_2.test(calc_nram_hash(pf_addr,2) % RAM_VECTOR) && group->rows_3.test(calc_nram_hash(pf_addr,3) % RAM_VECTOR));
+  }
+  else
+    return(false);
+}
+
+void spp_raf_l2c::PREFETCH_FILTER::set_nram_table(champsim::address pf_addr) {
+  auto group = nram_table.check_hit(ram_table_new_entry{raf_bloom_rb(pf_addr),0});
+  
+  if(!group.has_value()) {
+    group = ram_table_new_entry{raf_bloom_rb(pf_addr),_parent->current_cycle};
+    
+  }
+  group->rows.set(calc_nram_hash(pf_addr,1) % RAM_VECTOR);
+  group->rows_2.set(calc_nram_hash(pf_addr,2) % RAM_VECTOR);
+  group->rows_3.set(calc_nram_hash(pf_addr,3) % RAM_VECTOR);
+  nram_table.fill(group.value());
+  
+}
+
+void spp_raf_l2c::PREFETCH_FILTER::reset_nram_table(champsim::address pf_addr) {
+  auto group = nram_table.check_hit(ram_table_new_entry{raf_bloom_rb(pf_addr),0});
+  
+  if(group.has_value()) {
+    group->rows.reset(calc_nram_hash(pf_addr,1) % RAM_VECTOR);
+    group->rows_2.reset(calc_nram_hash(pf_addr,2) % RAM_VECTOR);
+    group->rows_3.reset(calc_nram_hash(pf_addr,3) % RAM_VECTOR);
+    nram_table.fill(group.value()); 
+  }
+  
+}
+
+uint64_t spp_raf_l2c::PREFETCH_FILTER::calc_nram_hash(champsim::address pf_addr, unsigned int ind) {
+
+  uint64_t hash_val = raf_bloom_hash(pf_addr);
+  if(ind == 2) {
+    uint64_t temp_hash = hash_val;
+    hash_val ^= (temp_hash >> 32);
+    hash_val ^= (temp_hash << 32);
+  }
+  if(ind == 3) {
+    uint64_t temp_hash = hash_val;
+    hash_val ^= (temp_hash >> 48);
+    hash_val ^= (temp_hash << 16);
+  }
+  //fmt::print("hash val is: {}\n",hash_val);
+  return(hash_val);
+}
+
 unsigned int spp_raf_l2c::PREFETCH_FILTER::raf_bloom_rb(champsim::address pf_addr) {
   std::size_t channel = MEMORY_CONTROLLER::DRAM_CONTROLLER.value()->dram_get_channel(pf_addr);
   std::size_t rank = MEMORY_CONTROLLER::DRAM_CONTROLLER.value()->dram_get_rank(pf_addr);
@@ -502,11 +566,11 @@ unsigned int spp_raf_l2c::PREFETCH_FILTER::raf_bloom_rb(champsim::address pf_add
   return(rb_id);
 }
 
-unsigned int spp_raf_l2c::PREFETCH_FILTER::raf_bloom_hash(champsim::address pf_addr) {
+uint64_t spp_raf_l2c::PREFETCH_FILTER::raf_bloom_hash(champsim::address pf_addr) {
   //bloom hash
   std::size_t row = MEMORY_CONTROLLER::DRAM_CONTROLLER.value()->dram_get_row(pf_addr);
 
-  unsigned int hash = (row ^ raf_bloom_rb(pf_addr)) % RAF_BF_ENTRIES;
+  uint64_t hash = get_hash(row);
   //fmt::print("bloom hash = {}\n",hash);
   //for right now, hash is just the row
   return(hash);
