@@ -22,10 +22,10 @@ void spp_raf_l2c::prefetcher_initialize()
 
   std::cout << std::endl << "Initialize PREFETCH FILTER" << std::endl;
   std::cout << "FILTER_SET: " << FILTER_SET << std::endl;
-  std::cout << "RAF SETS: " << RAF_SETS << std::endl;
-  std::cout << "RAF WAYS: " << RAF_WAYS << std::endl;
   std::cout << "RAM SETS: " << RAM_SETS << std::endl;
-  std::cout << "RAM WAYS: " << RAM_WAYS << std::endl << std::endl;
+  std::cout << "RAM WAYS: " << RAM_WAYS << std::endl;
+  std::cout << "NRAM SETS: " << NRAM_SETS << std::endl;
+  std::cout << "NRAM WAYS: " << NRAM_WAYS << std::endl << std::endl;
 
 
   //pass pointers
@@ -48,11 +48,9 @@ uint32_t spp_raf_l2c::prefetcher_cache_operate(champsim::address addr, champsim:
   uint32_t last_sig = 0, curr_sig = 0, depth = 0;
   std::vector<uint32_t> confidence_q(intern_->get_mshr_size());
 
-  FILTER.raf_bloom_reset(addr);
-
-  if(type == access_type::LOAD)
+  if(type == access_type::LOAD && cache_hit == 0) {
     FILTER.reset_nram_table(addr);
-
+  }
 
   typename spp_raf_l2c::offset_type::difference_type delta = 0;
   std::vector<typename spp_raf_l2c::offset_type::difference_type> delta_q(intern_->get_mshr_size());
@@ -92,8 +90,13 @@ uint32_t spp_raf_l2c::prefetcher_cache_operate(champsim::address addr, champsim:
 
     do_lookahead = 0;
     for (uint32_t i = pf_q_head; i < pf_q_tail; i++) {
+
+      if(confidence_q[i] <= 0)
+        continue;
+      champsim::address pf_addr{champsim::block_number{base_addr} + delta_q[i]};
+      confidence_q[i] = FILTER.get_ram_conf(confidence_q[i],pf_addr);
+
       if (confidence_q[i] >= PF_THRESHOLD) {
-        champsim::address pf_addr{champsim::block_number{base_addr} + delta_q[i]};
 
         if (champsim::page_number{pf_addr} == page) { // Prefetch request is in the same physical page
           if (FILTER.check(pf_addr, ((confidence_q[i] >= FILL_THRESHOLD) ? spp_raf_l2c::SPP_L2C_PREFETCH : spp_raf_l2c::SPP_LLC_PREFETCH),confidence_q[i])) {
@@ -168,7 +171,10 @@ uint32_t spp_raf_l2c::prefetcher_cache_fill(champsim::address addr, long set, lo
 void spp_raf_l2c::prefetcher_final_stats() {
 
   fmt::print("SPP-RAF:\n");
-  fmt::print("\tRAF FILTER %: {}\n",(FILTER.filtered / (double)FILTER.total) * 100.0);
+  fmt::print("\tRAF DROPPED %: {}\n",(FILTER.filtered / (double)FILTER.total) * 100.0);
+  fmt::print("\tRAF PROMOTED %: {}\n",(FILTER.promoted / (double)FILTER.total) * 100.0);
+  fmt::print("\tRAF MODIFIED %: {}\n",(FILTER.modified / (double)FILTER.total) * 100.0);
+  fmt::print("\tRAF IGNORED %: {}\n",((FILTER.total - FILTER.filtered - FILTER.promoted - FILTER.modified) / (double)FILTER.total) * 100.0);
   fmt::print("\t---- FILTER CONTENTS ----\n");
   /*for (auto i : FILTER.ram_table.get_contents()) {
     if(i.last_used != 0) {
@@ -179,9 +185,7 @@ void spp_raf_l2c::prefetcher_final_stats() {
   for (auto i : FILTER.nram_table.get_contents()) {
     if(i.last_used != 0) {
       //there is data here
-      fmt::print("\t\tGROUP: {} AGE: {} ROWS1: {}\n",i.data.bank_id,current_cycle - i.data.first_used,i.data.rows.to_string());
-      fmt::print("\t\t\t                  ROWS2: {}\n",i.data.rows_2.to_string());
-      fmt::print("\t\t\t                  ROWS3: {}\n",i.data.rows_3.to_string());
+      fmt::print("\t\tAGE: {} ROW: {} GROUPS: {}\n",current_cycle - i.data.first_used,i.data.row_id,i.data.groups.to_string());
     }
   }
 }
@@ -436,49 +440,22 @@ void spp_raf_l2c::PATTERN_TABLE::read_pattern(uint32_t curr_sig, std::vector<typ
   }
 }
 
-void spp_raf_l2c::PREFETCH_FILTER::raf_bloom_mark(champsim::address pf_addr) {
-  unsigned int hash = raf_bloom_hash(pf_addr) % RAF_BF_ENTRIES;
-  unsigned int rb_id = raf_bloom_rb(pf_addr) % RAF_RB_ENTRIES;
-  if(raf_bloom_filter[rb_id][hash] < RAF_BF_THRESH)
-    raf_bloom_filter[rb_id][hash]++;
-}
-
-void spp_raf_l2c::PREFETCH_FILTER::raf_bloom_reset(champsim::address pf_addr) {
-  unsigned int hash = raf_bloom_hash(pf_addr) % RAF_BF_ENTRIES;
-  unsigned int rb_id = raf_bloom_rb(pf_addr) % RAF_RB_ENTRIES;
-  raf_bloom_filter[rb_id][hash] = 0;
-}
-
-bool spp_raf_l2c::PREFETCH_FILTER::raf_bloom_check(champsim::address pf_addr) {
-  unsigned int hash = raf_bloom_hash(pf_addr) % RAF_BF_ENTRIES;
-  unsigned int rb_id = raf_bloom_rb(pf_addr) % RAF_RB_ENTRIES;
-  return(raf_bloom_filter[rb_id][hash] >= RAF_BF_THRESH);
-}
-
 bool spp_raf_l2c::PREFETCH_FILTER::raf_check(champsim::address pf_addr, unsigned long confidence) {
 
   total++;
 
-  bool filter = confidence < 100 ? check_nram_table(pf_addr) : false;
+  bool filter = confidence < 70 && confidence > 40 ? (check_nram_table(pf_addr)): false;
   if(filter)
     filtered++;
   return(filter);
 }
 
-bool spp_raf_l2c::PREFETCH_FILTER::check_row_table(champsim::address pf_addr) {
-  auto row = row_table.check_hit(row_table_entry{raf_bloom_rb(pf_addr),MEMORY_CONTROLLER::DRAM_CONTROLLER.value()->dram_get_row(pf_addr)});
-  return(row.has_value());
-}
-
-void spp_raf_l2c::PREFETCH_FILTER::set_row_table(champsim::address pf_addr) {
-  row_table.fill(row_table_entry{raf_bloom_rb(pf_addr),MEMORY_CONTROLLER::DRAM_CONTROLLER.value()->dram_get_row(pf_addr)});
-}
 
 bool spp_raf_l2c::PREFETCH_FILTER::check_ram_table(champsim::address pf_addr) {
   auto row = ram_table.check_hit(ram_table_entry{MEMORY_CONTROLLER::DRAM_CONTROLLER.value()->dram_get_row(pf_addr),0});
 
   if(row.has_value()) {
-    return(row->groups.test(raf_bloom_rb(pf_addr)));
+    return(row->groups.test(raf_rb(pf_addr) % RAM_VECTOR));
   }
   else
     return(true);
@@ -490,50 +467,88 @@ void spp_raf_l2c::PREFETCH_FILTER::set_ram_table(champsim::address pf_addr) {
   if(!row.has_value())
     row = ram_table_entry{MEMORY_CONTROLLER::DRAM_CONTROLLER.value()->dram_get_row(pf_addr),_parent->current_cycle};
 
-  row->groups.set(raf_bloom_rb(pf_addr));
+  row->groups.set(raf_rb(pf_addr) % RAM_VECTOR);
   ram_table.fill(row.value());
   
 }
 
 bool spp_raf_l2c::PREFETCH_FILTER::check_nram_table(champsim::address pf_addr) {
-  auto group = nram_table.check_hit(ram_table_new_entry{raf_bloom_rb(pf_addr),0});
+  auto row = nram_table.check_hit(ram_table_entry{MEMORY_CONTROLLER::DRAM_CONTROLLER.value()->dram_get_row(pf_addr),0});
 
-  if(group.has_value()) {
-    return(group->rows.test(calc_nram_hash(pf_addr,1) % RAM_VECTOR) && group->rows_2.test(calc_nram_hash(pf_addr,2) % RAM_VECTOR) && group->rows_3.test(calc_nram_hash(pf_addr,3) % RAM_VECTOR));
+  if(row.has_value()) {
+    return(row->groups.test(raf_rb(pf_addr) % NRAM_VECTOR));
   }
   else
     return(false);
 }
 
+uint64_t spp_raf_l2c::PREFETCH_FILTER::get_ram_conf(uint64_t confidence, champsim::address pf_addr) {
+  //get entry from nram table
+  auto row = nram_table.check_hit(ram_table_entry{MEMORY_CONTROLLER::DRAM_CONTROLLER.value()->dram_get_row(pf_addr),0});
+  long long int bias = 0;
+  uint64_t new_confidence = confidence;
+  total++;
+
+  //if it exists, set bias according to filter
+  if(row.has_value())
+    bias = row->groups.test(raf_rb(pf_addr) % NRAM_VECTOR) ? NRAM_FILT : NRAM_PROM;
+
+  //don't demote high-confidence prefetches
+  if(confidence >= FILL_THRESHOLD)
+    bias = std::max(bias,0ll);
+
+  //clamp confidence value
+  if(bias < 0 && confidence < std::abs(bias))
+    new_confidence = 0;
+  else if(bias > 0 && confidence > 100 - bias) {
+    new_confidence = 100;
+  }
+  else
+    new_confidence = confidence + bias;
+
+  //collect stats
+  if(new_confidence != confidence) {
+    if(new_confidence < PF_THRESHOLD && confidence >= PF_THRESHOLD)
+      filtered++;
+    else if(confidence < PF_THRESHOLD && new_confidence >= PF_THRESHOLD)
+      promoted++;
+    else
+      modified++;
+  }
+
+  //return result
+  return(new_confidence);
+}
+
 void spp_raf_l2c::PREFETCH_FILTER::set_nram_table(champsim::address pf_addr) {
-  auto group = nram_table.check_hit(ram_table_new_entry{raf_bloom_rb(pf_addr),0});
+  auto row = nram_table.check_hit(ram_table_entry{MEMORY_CONTROLLER::DRAM_CONTROLLER.value()->dram_get_row(pf_addr),0});
   
-  if(!group.has_value()) {
-    group = ram_table_new_entry{raf_bloom_rb(pf_addr),_parent->current_cycle};
+  if(!row.has_value()) {
+    row = ram_table_entry{MEMORY_CONTROLLER::DRAM_CONTROLLER.value()->dram_get_row(pf_addr),_parent->current_cycle};
     
   }
-  group->rows.set(calc_nram_hash(pf_addr,1) % RAM_VECTOR);
-  group->rows_2.set(calc_nram_hash(pf_addr,2) % RAM_VECTOR);
-  group->rows_3.set(calc_nram_hash(pf_addr,3) % RAM_VECTOR);
-  nram_table.fill(group.value());
+  row->groups.set(raf_rb(pf_addr) % NRAM_VECTOR);
+  nram_table.fill(row.value());
   
 }
 
 void spp_raf_l2c::PREFETCH_FILTER::reset_nram_table(champsim::address pf_addr) {
-  auto group = nram_table.check_hit(ram_table_new_entry{raf_bloom_rb(pf_addr),0});
+  auto row = nram_table.check_hit(ram_table_entry{MEMORY_CONTROLLER::DRAM_CONTROLLER.value()->dram_get_row(pf_addr),0});
   
-  if(group.has_value()) {
-    group->rows.reset(calc_nram_hash(pf_addr,1) % RAM_VECTOR);
-    group->rows_2.reset(calc_nram_hash(pf_addr,2) % RAM_VECTOR);
-    group->rows_3.reset(calc_nram_hash(pf_addr,3) % RAM_VECTOR);
-    nram_table.fill(group.value()); 
+  if(row.has_value()) {
+    row->groups.reset(raf_rb(pf_addr) % NRAM_VECTOR);
+
+    if(row->groups.none())
+    nram_table.invalidate(row.value());
+    else
+    nram_table.fill(row.value()); 
   }
   
 }
 
 uint64_t spp_raf_l2c::PREFETCH_FILTER::calc_nram_hash(champsim::address pf_addr, unsigned int ind) {
 
-  uint64_t hash_val = raf_bloom_hash(pf_addr);
+  uint64_t hash_val = get_hash(pf_addr.to<uint64_t>());
   if(ind == 2) {
     uint64_t temp_hash = hash_val;
     hash_val ^= (temp_hash >> 32);
@@ -548,7 +563,7 @@ uint64_t spp_raf_l2c::PREFETCH_FILTER::calc_nram_hash(champsim::address pf_addr,
   return(hash_val);
 }
 
-unsigned int spp_raf_l2c::PREFETCH_FILTER::raf_bloom_rb(champsim::address pf_addr) {
+unsigned int spp_raf_l2c::PREFETCH_FILTER::raf_rb(champsim::address pf_addr) {
   std::size_t channel = MEMORY_CONTROLLER::DRAM_CONTROLLER.value()->dram_get_channel(pf_addr);
   std::size_t rank = MEMORY_CONTROLLER::DRAM_CONTROLLER.value()->dram_get_rank(pf_addr);
   std::size_t bank = MEMORY_CONTROLLER::DRAM_CONTROLLER.value()->dram_get_bank(pf_addr);
@@ -564,16 +579,6 @@ unsigned int spp_raf_l2c::PREFETCH_FILTER::raf_bloom_rb(champsim::address pf_add
   
   //fmt::print("row buffer id = {}\n",rb_id % RAF_RB_ENTRIES);
   return(rb_id);
-}
-
-uint64_t spp_raf_l2c::PREFETCH_FILTER::raf_bloom_hash(champsim::address pf_addr) {
-  //bloom hash
-  std::size_t row = MEMORY_CONTROLLER::DRAM_CONTROLLER.value()->dram_get_row(pf_addr);
-
-  uint64_t hash = get_hash(row);
-  //fmt::print("bloom hash = {}\n",hash);
-  //for right now, hash is just the row
-  return(hash);
 }
 
 bool spp_raf_l2c::PREFETCH_FILTER::check(champsim::address check_addr, FILTER_REQUEST filter_request, unsigned int confidence)
@@ -626,9 +631,9 @@ bool spp_raf_l2c::PREFETCH_FILTER::check(champsim::address check_addr, FILTER_RE
 
       // valid[quotient] = 1;
       // useful[quotient] = 0;
-      if(raf_check(check_addr,confidence)) {
-        return(false);
-      }
+      //if(raf_check(check_addr,confidence)) {
+      //  return(false);
+      //}
 
       if constexpr (SPP_DEBUG_PRINT) {
         std::cout << "[FILTER] " << __func__ << " don't set valid for check_addr: " << check_addr << " cache_line: " << cache_line;

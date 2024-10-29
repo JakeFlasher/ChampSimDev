@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <vector>
 #include <bitset>
+#include <algorithm>
 #include "msl/lru_table.h"
 #include "modules.h"
 #include "cache.h"
@@ -41,22 +42,19 @@ class spp_raf_l2c : public champsim::modules::prefetcher {
   constexpr static std::size_t FILTER_SET = (1 << QUOTIENT_BIT);
   constexpr static uint32_t FILL_THRESHOLD = 90;
   constexpr static uint32_t PF_THRESHOLD = 25;
-  //BLACKIST LLC MISSES APPROACH
-  constexpr static unsigned DRAM_GROUPS = 32;
-  constexpr static unsigned RAF_BF_ENTRIES = 32;
-  constexpr static unsigned RAF_RB_ENTRIES = DRAM_GROUPS;
-  constexpr static unsigned RAF_BF_THRESH = 1;
-  //Table and guess approach
-  constexpr static unsigned RAF_SETS = DRAM_GROUPS;
-  constexpr static unsigned RAF_WAYS = 1;
-  constexpr static unsigned RAF_THRESHOLD = 85;
+
   //Row-access table
+  constexpr static unsigned DRAM_GROUPS = 32;
   constexpr static unsigned RAM_SETS = 1;
   constexpr static unsigned RAM_WAYS = 128;
   constexpr static unsigned RAM_VECTOR = DRAM_GROUPS;
 
-  constexpr static unsigned NRAM_SETS = DRAM_GROUPS;
-  constexpr static unsigned NRAM_WAYS = 1;
+  constexpr static long long int NRAM_PROM = 20;
+  constexpr static long long int NRAM_FILT = -5;
+
+  constexpr static unsigned NRAM_SETS = 1;
+  constexpr static unsigned NRAM_WAYS = 128;
+  constexpr static unsigned NRAM_VECTOR = DRAM_GROUPS;
 
   // Global register parameters
   constexpr static unsigned GLOBAL_COUNTER_BIT = 10;
@@ -140,15 +138,10 @@ class spp_raf_l2c : public champsim::modules::prefetcher {
     bool valid[FILTER_SET], // Consider this as "prefetched"
         useful[FILTER_SET]; // Consider this as "used"
 
-    uint8_t raf_bloom_filter[RAF_RB_ENTRIES][RAF_BF_ENTRIES];
-
     uint64_t filtered = 0;
+    uint64_t promoted = 0;
+    uint64_t modified = 0;
     uint64_t total = 0;
-
-    struct row_table_entry {
-      unsigned int bank_id;
-      unsigned int row_id;
-    };
 
     struct ram_table_entry {
       unsigned int row_id;
@@ -161,43 +154,16 @@ class spp_raf_l2c : public champsim::modules::prefetcher {
       explicit ram_table_entry(uint64_t row_id_, uint64_t first_used_) : row_id(row_id_), first_used(first_used_) {}
     };
 
-    struct ram_table_new_entry {
-      unsigned int bank_id;
-
-      std::bitset<RAM_VECTOR> rows{};
-      std::bitset<RAM_VECTOR> rows_2{};
-      std::bitset<RAM_VECTOR> rows_3{};
-
-      unsigned int first_used;
-
-      ram_table_new_entry() : ram_table_new_entry(0,0) {}
-      explicit ram_table_new_entry(uint64_t bank_id_, uint64_t first_used_) : bank_id(bank_id_), first_used(first_used_) {}
-    };
-
-    //FOR ROW TABLE FILTER APPROACH
-    struct row_set_indexer {
-      auto operator()(const row_table_entry& entry) const { return entry.bank_id; }
-    };
-    struct row_way_indexer {
-      auto operator()(const row_table_entry& entry) const { return entry.row_id; }
-    };
-
     struct ram_indexer {
       auto operator()(const ram_table_entry& entry) const { return entry.row_id; }
-    };
-
-    struct ram_set_indexer {
-      auto operator()(const ram_table_new_entry& entry) const { return entry.bank_id; }
     };
     //struct ram_way_indexer {
     //  auto operator()(const ram_table_new_entry& entry) const { return entry.row_id; }
     //};
 
-    champsim::msl::lru_table<row_table_entry,row_set_indexer,row_way_indexer> row_table{RAF_SETS,RAF_WAYS};
-
     champsim::msl::lru_table<ram_table_entry,ram_indexer,ram_indexer> ram_table{RAM_SETS,RAM_WAYS};
 
-    champsim::msl::lru_table<ram_table_new_entry,ram_set_indexer,ram_set_indexer> nram_table{NRAM_SETS,NRAM_WAYS};
+    champsim::msl::lru_table<ram_table_entry,ram_indexer,ram_indexer> nram_table{NRAM_SETS,NRAM_WAYS};
 
     PREFETCH_FILTER()
     {
@@ -206,24 +172,14 @@ class spp_raf_l2c : public champsim::modules::prefetcher {
         valid[set] = 0;
         useful[set] = 0;
       }
-      for (unsigned int e = 0; e < RAF_RB_ENTRIES; e++)
-        for(unsigned int e2 = 0; e2 < RAF_BF_ENTRIES; e2++)
-          raf_bloom_filter[e][e2] = 0;
     }
 
     bool check(champsim::address pf_addr, FILTER_REQUEST filter_request, unsigned int confidence = 0);
 
-    uint64_t raf_bloom_hash(champsim::address pf_addr);
-    unsigned int raf_bloom_rb(champsim::address pf_addr);
-    void raf_bloom_reset(champsim::address pf_addr);
-    void raf_bloom_mark(champsim::address pf_addr);
-    bool raf_bloom_check(champsim::address pf_addr);
+    unsigned int raf_rb(champsim::address pf_addr);
 
     bool raf_check(champsim::address pf_addr, unsigned long confidence);
 
-    //row table
-    void set_row_table(champsim::address pf_addr);
-    bool check_row_table(champsim::address pf_addr);
 
     //ram table
     void set_ram_table(champsim::address pf_addr);
@@ -232,6 +188,8 @@ class spp_raf_l2c : public champsim::modules::prefetcher {
     void set_nram_table(champsim::address pf_addr);
     void reset_nram_table(champsim::address pf_addr);
     bool check_nram_table(champsim::address pf_addr);
+
+    uint64_t get_ram_conf(uint64_t confidence, champsim::address pf_addr);
 
     uint64_t calc_nram_hash(champsim::address pf_addr, unsigned int ind);
   };
