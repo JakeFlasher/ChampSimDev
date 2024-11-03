@@ -76,7 +76,7 @@ phase_stats do_phase(const phase_info& phase, environment& env, std::vector<trac
 
   bool livelock{false};
   uint64_t livelock_period{1000000};
-  uint64_t livelock_progress{10000};
+  uint64_t livelock_progress{1000};
   std::vector<uint64_t> livelock_timer(std::size(env.cpu_view()),0);
   std::vector<uint64_t> livelock_instr(std::size(env.cpu_view()),0);
   // Perform phase
@@ -111,8 +111,10 @@ phase_stats do_phase(const phase_info& phase, environment& env, std::vector<trac
       next_phase_complete[cpu.cpu] = next_phase_complete[cpu.cpu] || (cpu.sim_instr() >= length);
       if(cpu.sim_instr() <= livelock_instr[cpu.cpu] + livelock_progress){
         livelock_timer[cpu.cpu]++;
-        if(livelock_timer[cpu.cpu] > livelock_period)
+        if(livelock_timer[cpu.cpu] > livelock_period) {
           livelock = true;
+          fmt::print("livelock triggered\n");
+        }
       }
       else {
         livelock_timer[cpu.cpu] = 0;

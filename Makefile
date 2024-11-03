@@ -21,8 +21,8 @@ override RAMULATOR_ROOT:= $(ROOT_DIR)/ramulator2
 
 # vcpkg and ramulator integration
 TRIPLET_DIR = $(patsubst %/,%,$(firstword $(filter-out $(ROOT_DIR)/vcpkg_installed/vcpkg/, $(wildcard $(ROOT_DIR)/vcpkg_installed/*/))))
-override CPPFLAGS += -O3 -flto -I$(OBJ_ROOT) -I$(DRAM_CONTROLLER_ROOT) -I$(RAMULATOR_ROOT)/src
-override LDFLAGS  += -flto -s -L$(TRIPLET_DIR)/lib -L$(TRIPLET_DIR)/lib/manual-link 
+override CPPFLAGS += -O3 -fno-strict-aliasing -flto -I$(OBJ_ROOT) -I$(DRAM_CONTROLLER_ROOT) -I$(RAMULATOR_ROOT)/src
+override LDFLAGS  += -flto -s -L$(TRIPLET_DIR)/lib -L$(TRIPLET_DIR)/lib/manual-link  -fno-strict-aliasing
 override LDLIBS   += -llzma -lz -lbz2 -lfmt
 
 # find vcpkg's local copy of cmake for building ramulator if it was installed
