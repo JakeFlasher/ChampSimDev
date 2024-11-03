@@ -77,7 +77,7 @@ class ChampSimPlugin : public IControllerPlugin, public Implementation {
           else if(req_it->type_id == Ramulator::Request::Type::Read)
           rrb_hits++;
 
-          dbus_congested_cycles += (cycles - req_it->arrive) - 1;
+          dbus_congested_cycles += (cycles - req_it->arrive) - m_dram->m_timing_vals("nCL");
           dbus_packets++;
          
         }
@@ -91,7 +91,7 @@ class ChampSimPlugin : public IControllerPlugin, public Implementation {
           {
             rrb_miss++;
           }
-          dbus_congested_cycles -= cycles - req_it->arrive;
+          dbus_congested_cycles -= m_dram->m_timing_vals("nRAS") + m_dram->m_timing_vals("nRP");
         }
         else if(m_dram->m_command_meta(req_it->command).is_refreshing) //refreshed
         {

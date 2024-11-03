@@ -39,7 +39,10 @@ void spp_raf_l2c::prefetcher_initialize()
 
 }
 
-void spp_raf_l2c::prefetcher_cycle_operate() { current_cycle++;}
+void spp_raf_l2c::prefetcher_cycle_operate() { 
+  current_cycle++;
+  
+}
 
 
 uint32_t spp_raf_l2c::prefetcher_cache_operate(champsim::address addr, champsim::address ip, uint8_t cache_hit, bool useful_prefetch, access_type type, uint32_t metadata_in)
@@ -48,9 +51,14 @@ uint32_t spp_raf_l2c::prefetcher_cache_operate(champsim::address addr, champsim:
   uint32_t last_sig = 0, curr_sig = 0, depth = 0;
   std::vector<uint32_t> confidence_q(intern_->get_mshr_size());
 
-  if(type == access_type::LOAD && cache_hit == 0) {
-    FILTER.reset_nram_table(addr);
-  }
+  //if(type == access_type::LOAD && cache_hit == 0) {
+  //  FILTER.reset_nram_table(addr);
+  //}
+
+  if(type == access_type::LOAD)
+    FILTER.demand_issue_rad_table(addr);
+
+  FILTER.cycle_operate_rad_table();
 
   typename spp_raf_l2c::offset_type::difference_type delta = 0;
   std::vector<typename spp_raf_l2c::offset_type::difference_type> delta_q(intern_->get_mshr_size());
@@ -94,13 +102,16 @@ uint32_t spp_raf_l2c::prefetcher_cache_operate(champsim::address addr, champsim:
       if(confidence_q[i] <= 0)
         continue;
       champsim::address pf_addr{champsim::block_number{base_addr} + delta_q[i]};
-      confidence_q[i] = FILTER.get_ram_conf(confidence_q[i],pf_addr);
+      //confidence_q[i] = FILTER.get_ram_conf(confidence_q[i],pf_addr);
 
       if (confidence_q[i] >= PF_THRESHOLD) {
 
         if (champsim::page_number{pf_addr} == page) { // Prefetch request is in the same physical page
           if (FILTER.check(pf_addr, ((confidence_q[i] >= FILL_THRESHOLD) ? spp_raf_l2c::SPP_L2C_PREFETCH : spp_raf_l2c::SPP_LLC_PREFETCH),confidence_q[i])) {
-            prefetch_line(pf_addr, (confidence_q[i] >= FILL_THRESHOLD), 0); // Use addr (not base_addr) to obey the same physical page boundary
+            //if(confidence_q[i] < FILL_THRESHOLD)
+              FILTER.cache_operate_rad_table(pf_addr,(confidence_q[i] >= FILL_THRESHOLD),0);
+            //else
+              //prefetch_line(pf_addr, (confidence_q[i] >= FILL_THRESHOLD), 0); // Use addr (not base_addr) to obey the same physical page boundary
 
             if (confidence_q[i] >= FILL_THRESHOLD) {
               GHR.pf_issued++;
@@ -472,6 +483,101 @@ void spp_raf_l2c::PREFETCH_FILTER::set_ram_table(champsim::address pf_addr) {
   
 }
 
+void spp_raf_l2c::PREFETCH_FILTER::set_rat_table(champsim::address pf_addr) {
+  auto entry = rat_table.check_hit(rat_table_entry{MEMORY_CONTROLLER::DRAM_CONTROLLER.value()->dram_get_row(pf_addr),raf_rb(pf_addr),0});
+  
+  if(!entry.has_value())
+    rat_table.fill(rat_table_entry{MEMORY_CONTROLLER::DRAM_CONTROLLER.value()->dram_get_row(pf_addr),raf_rb(pf_addr),_parent->current_cycle});
+  
+}
+
+bool spp_raf_l2c::PREFETCH_FILTER::check_rat_table(champsim::address pf_addr) {
+  return(rat_table.check_hit(rat_table_entry{MEMORY_CONTROLLER::DRAM_CONTROLLER.value()->dram_get_row(pf_addr),raf_rb(pf_addr),0}).has_value());
+}
+
+void spp_raf_l2c::PREFETCH_FILTER::add_rad_table(champsim::address pf_addr, bool fill_this_level, uint32_t metadata) {
+  auto entry = rad_table.check_hit(rad_table_entry{MEMORY_CONTROLLER::DRAM_CONTROLLER.value()->dram_get_row(pf_addr),raf_rb(pf_addr),0});
+  if(!entry.has_value()) {
+    entry = rad_table_entry{MEMORY_CONTROLLER::DRAM_CONTROLLER.value()->dram_get_row(pf_addr),raf_rb(pf_addr),_parent->current_cycle};
+  }
+  entry->blocks[get_column_block(pf_addr)] = pf_addr;
+  entry->fill_this_level[get_column_block(pf_addr)] = fill_this_level;
+  entry->metadata[get_column_block(pf_addr)] = metadata; 
+
+  rad_table_entry evic;
+  rad_table.fill(entry.value(),evic);
+
+  if(evic.first_used != 0) {
+    //fmt::print("Serving evicted table\n");
+    issue_rad_table(evic);
+    //fmt::print("Done\n");
+  }
+}
+
+void spp_raf_l2c::PREFETCH_FILTER::demand_issue_rad_table(champsim::address pf_addr) {
+  auto entry = rad_table.check_hit(rad_table_entry{MEMORY_CONTROLLER::DRAM_CONTROLLER.value()->dram_get_row(pf_addr),raf_rb(pf_addr),0});
+
+  if(entry.has_value()) {
+    //fmt::print("Demand issuing for RAD table entry: row: {} group: {}\n",entry->row_id,entry->bank_id);
+    entry->blocks[get_column_block(pf_addr)] = champsim::address{0};
+    issue_rad_table(entry.value());
+  }
+}
+
+uint64_t spp_raf_l2c::PREFETCH_FILTER::get_column_block(champsim::address pf_addr) {
+
+  uint64_t column_block = MEMORY_CONTROLLER::DRAM_CONTROLLER.value()->dram_get_column(pf_addr);
+  //fmt::print("Converted pf_addr:{} to column:{}\n",pf_addr,column_block);
+  return(column_block);
+}
+
+void spp_raf_l2c::PREFETCH_FILTER::inval_rad_table(rad_table_entry rte) {
+  rad_table.invalidate(rte);
+  //fmt::print("Invalidated RAD table entry: row: {} group:{}\n",rte.row_id,rte.bank_id);
+}
+
+void spp_raf_l2c::PREFETCH_FILTER::cache_operate_rad_table(champsim::address pf_addr, bool fill_this_level, uint32_t metadata) {
+  add_rad_table(pf_addr, fill_this_level, metadata);
+  auto entry = rad_table.check_hit(rad_table_entry{MEMORY_CONTROLLER::DRAM_CONTROLLER.value()->dram_get_row(pf_addr),raf_rb(pf_addr),0});
+
+  thresh_issue_rad_table(entry.value());
+}
+void spp_raf_l2c::PREFETCH_FILTER::cycle_operate_rad_table() {
+  for(auto i : rad_table.get_contents())
+    if(i.data.first_used != 0)
+      time_issue_rad_table(i.data);
+}
+
+void spp_raf_l2c::PREFETCH_FILTER::time_issue_rad_table(rad_table_entry rte) {
+  
+  if(_parent->current_cycle - rte.first_used >= RAD_DELAY) {
+    //fmt::print("Time issuing for RAD table entry: row: {} group: {}\n",rte.row_id,rte.bank_id);
+    issue_rad_table(rte);
+  }
+}
+void spp_raf_l2c::PREFETCH_FILTER::issue_rad_table(rad_table_entry rte) {
+  //fmt::print("Issuing RAD table entry: row: {} group:{}\n",rte.row_id,rte.bank_id);
+  for(uint64_t i = 0; i < RAD_VECTOR; i++) {
+    if(rte.blocks[i] != champsim::address{0})
+    {
+      //issue prefetch for this block
+      _parent->prefetch_line(rte.blocks[i],rte.fill_this_level[i],rte.metadata[i]);
+      //fmt::print("\tPrefetched address: {} fill_this_level: {} delayed: {}\n",rte.blocks[i],rte.fill_this_level[i],_parent->current_cycle - rte.first_used);
+    }
+  }
+  rad_table.invalidate(rte);
+}
+void spp_raf_l2c::PREFETCH_FILTER::thresh_issue_rad_table(rad_table_entry rte) {
+  
+  std::size_t entries = std::count_if(rte.blocks.begin(), rte.blocks.end(), [](champsim::address i) { return i != champsim::address{0}; });
+  
+
+  if(entries >= RAD_ISSUE_THRESH) {
+    //fmt::print("Threshold issuing for RAD table entry: row: {} group: {} entries: {}\n",rte.row_id,rte.bank_id,entries);
+    issue_rad_table(rte);
+  }
+}
+
 bool spp_raf_l2c::PREFETCH_FILTER::check_nram_table(champsim::address pf_addr) {
   auto row = nram_table.check_hit(ram_table_entry{MEMORY_CONTROLLER::DRAM_CONTROLLER.value()->dram_get_row(pf_addr),0});
 
@@ -484,14 +590,16 @@ bool spp_raf_l2c::PREFETCH_FILTER::check_nram_table(champsim::address pf_addr) {
 
 uint64_t spp_raf_l2c::PREFETCH_FILTER::get_ram_conf(uint64_t confidence, champsim::address pf_addr) {
   //get entry from nram table
-  auto row = nram_table.check_hit(ram_table_entry{MEMORY_CONTROLLER::DRAM_CONTROLLER.value()->dram_get_row(pf_addr),0});
+  //auto row = nram_table.check_hit(ram_table_entry{MEMORY_CONTROLLER::DRAM_CONTROLLER.value()->dram_get_row(pf_addr),0});
+  auto row = rat_table.check_hit(rat_table_entry{MEMORY_CONTROLLER::DRAM_CONTROLLER.value()->dram_get_row(pf_addr),raf_rb(pf_addr),0});
   long long int bias = 0;
   uint64_t new_confidence = confidence;
   total++;
 
   //if it exists, set bias according to filter
-  if(row.has_value())
-    bias = row->groups.test(raf_rb(pf_addr) % NRAM_VECTOR) ? NRAM_FILT : NRAM_PROM;
+  //if(row.has_value())
+    //bias = row->groups.test(raf_rb(pf_addr) % NRAM_VECTOR) ? NRAM_FILT : NRAM_PROM;
+  bias = row.has_value() ? NRAM_PROM : NRAM_FILT;
 
   //don't demote high-confidence prefetches
   if(confidence >= FILL_THRESHOLD)

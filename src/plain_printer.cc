@@ -69,6 +69,7 @@ std::vector<std::string> champsim::plain_printer::format(CACHE::stats_type stats
 {
   using hits_value_type = typename decltype(stats.hits)::value_type;
   using misses_value_type = typename decltype(stats.misses)::value_type;
+  using downstream_value_type = typename decltype(stats.downstream_packets)::value_type;
 
   for (const auto type : {access_type::LOAD, access_type::RFO, access_type::PREFETCH, access_type::WRITE, access_type::TRANSLATION}) {
     for (std::size_t cpu = 0; cpu < NUM_CPUS; ++cpu) {
@@ -97,7 +98,18 @@ std::vector<std::string> champsim::plain_printer::format(CACHE::stats_type stats
 
     lines.push_back(fmt::format("{} PREFETCH REQUESTED: {:10} ISSUED: {:10} USEFUL: {:10} USELESS: {:10}", stats.name, stats.pf_requested, stats.pf_issued,
                                 stats.pf_useful, stats.pf_useless));
-    lines.push_back(fmt::format("{} AVERAGE MISS LATENCY: {} cycles", stats.name, ::print_ratio(stats.total_miss_latency_cycles, stats.misses.total())));
+
+    lines.push_back(
+          fmt::format("{} DOWNSTREAM PACKETS: {:10} LOAD: {:10} RFO: {:10} PREFETCH: {:10} WRITE: {:10} TRANSLATION: {:10}",
+                      stats.name,
+                      stats.downstream_packets.total(),
+                      stats.downstream_packets.value_or(std::pair{access_type::LOAD,cpu},downstream_value_type{}),
+                      stats.downstream_packets.value_or(std::pair{access_type::RFO,cpu},downstream_value_type{}),
+                      stats.downstream_packets.value_or(std::pair{access_type::PREFETCH,cpu},downstream_value_type{}),
+                      stats.downstream_packets.value_or(std::pair{access_type::WRITE,cpu},downstream_value_type{}),
+                      stats.downstream_packets.value_or(std::pair{access_type::TRANSLATION,cpu},downstream_value_type{})));
+      
+    lines.push_back(fmt::format("{} AVERAGE MISS LATENCY: {} cycles", stats.name, ::print_ratio(stats.total_miss_latency_cycles, stats.downstream_packets.total() - stats.downstream_packets.value_or(std::pair{access_type::WRITE,cpu},downstream_value_type{}))));
   }
 
   return lines;

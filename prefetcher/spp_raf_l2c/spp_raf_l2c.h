@@ -45,16 +45,27 @@ class spp_raf_l2c : public champsim::modules::prefetcher {
 
   //Row-access table
   constexpr static unsigned DRAM_GROUPS = 32;
+  constexpr static unsigned DRAM_BLOCK_COLUMNS = 128;
+
+  constexpr static unsigned RAT_SETS = DRAM_GROUPS;
+  constexpr static unsigned RAT_WAYS = 1;
+
   constexpr static unsigned RAM_SETS = 1;
   constexpr static unsigned RAM_WAYS = 128;
   constexpr static unsigned RAM_VECTOR = DRAM_GROUPS;
 
-  constexpr static long long int NRAM_PROM = 20;
+  constexpr static long long int NRAM_PROM = 10;
   constexpr static long long int NRAM_FILT = -5;
 
   constexpr static unsigned NRAM_SETS = 1;
   constexpr static unsigned NRAM_WAYS = 128;
   constexpr static unsigned NRAM_VECTOR = DRAM_GROUPS;
+
+  constexpr static unsigned RAD_DELAY = 50;
+  constexpr static unsigned RAD_ISSUE_THRESH = 4;
+  constexpr static unsigned RAD_SETS = DRAM_GROUPS;
+  constexpr static unsigned RAD_WAYS = 4;
+  constexpr static unsigned RAD_VECTOR = DRAM_BLOCK_COLUMNS;
 
   // Global register parameters
   constexpr static unsigned GLOBAL_COUNTER_BIT = 10;
@@ -157,13 +168,49 @@ class spp_raf_l2c : public champsim::modules::prefetcher {
     struct ram_indexer {
       auto operator()(const ram_table_entry& entry) const { return entry.row_id; }
     };
-    //struct ram_way_indexer {
-    //  auto operator()(const ram_table_new_entry& entry) const { return entry.row_id; }
-    //};
+
+    struct rat_table_entry {
+      unsigned int row_id;
+      unsigned int bank_id;
+      unsigned int first_used;
+      rat_table_entry() : rat_table_entry(0,0,0) {}
+      explicit rat_table_entry(uint64_t row_id_, uint64_t bank_id_, uint64_t first_used_) : row_id(row_id_), bank_id(bank_id_), first_used(first_used_) {}
+    };
+    struct rat_set_indexer {
+      auto operator()(const rat_table_entry& entry) const { return entry.bank_id; }
+    };
+    struct rat_way_indexer {
+      auto operator()(const rat_table_entry& entry) const { return entry.row_id; }
+    };
+
+    struct rad_table_entry {
+      unsigned int row_id;
+      unsigned int bank_id;
+
+      unsigned int first_used;
+
+      //std::bitset<RAD_VECTOR> blocks{};
+      std::vector<champsim::address> blocks;
+      std::vector<bool>              fill_this_level;
+      std::vector<uint32_t>          metadata;
+
+      rad_table_entry() : rad_table_entry(0,0,0) {}
+      explicit rad_table_entry(uint64_t row_id_, uint64_t bank_id_, uint64_t first_used_) : row_id(row_id_), bank_id(bank_id_), first_used(first_used_), blocks(RAD_VECTOR), fill_this_level(RAD_VECTOR), metadata(RAD_VECTOR) {}
+    };
+    struct rad_set_indexer {
+      auto operator()(const rad_table_entry& entry) const { return entry.bank_id; }
+    };
+    struct rad_way_indexer {
+      auto operator()(const rad_table_entry& entry) const { return entry.row_id; }
+    };
 
     champsim::msl::lru_table<ram_table_entry,ram_indexer,ram_indexer> ram_table{RAM_SETS,RAM_WAYS};
 
     champsim::msl::lru_table<ram_table_entry,ram_indexer,ram_indexer> nram_table{NRAM_SETS,NRAM_WAYS};
+
+    champsim::msl::lru_table<rat_table_entry,rat_set_indexer,rat_way_indexer> rat_table{RAT_SETS,RAT_WAYS};
+
+    champsim::msl::lru_table<rad_table_entry,rad_set_indexer,rad_way_indexer> rad_table{RAD_SETS,RAD_WAYS};
 
     PREFETCH_FILTER()
     {
@@ -188,6 +235,21 @@ class spp_raf_l2c : public champsim::modules::prefetcher {
     void set_nram_table(champsim::address pf_addr);
     void reset_nram_table(champsim::address pf_addr);
     bool check_nram_table(champsim::address pf_addr);
+
+    void set_rat_table(champsim::address pf_addr);
+    bool check_rat_table(champsim::address pf_addr);
+
+    void add_rad_table(champsim::address pf_addr, bool fill_this_level, uint32_t metadata);
+    void thresh_issue_rad_table(rad_table_entry rte);
+    void time_issue_rad_table(rad_table_entry rte);
+    void demand_issue_rad_table(champsim::address pf_addr);
+    void issue_rad_table(rad_table_entry rte);
+    void inval_rad_table(rad_table_entry rte);
+
+    void cache_operate_rad_table(champsim::address pf_addr, bool fill_this_level, uint32_t metadata);
+    void cycle_operate_rad_table();
+
+    uint64_t get_column_block(champsim::address pf_addr);
 
     uint64_t get_ram_conf(uint64_t confidence, champsim::address pf_addr);
 

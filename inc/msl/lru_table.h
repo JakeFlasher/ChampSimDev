@@ -149,6 +149,22 @@ public:
         *hit = {++access_count, elem};
       } else {
         *miss = {++access_count, elem};
+        
+      }
+    }
+  }
+
+  void fill(const value_type& elem, value_type& evic) {
+    auto tag = tag_projection(elem);
+    auto [set_begin, set_end] = get_set_span(elem);
+    if (set_begin != set_end) {
+      auto [miss, hit] = std::minmax_element(set_begin, set_end, match_and_check(tag));
+
+      if (tag_projection(hit->data) == tag) {
+        *hit = {++access_count, elem};
+      } else {
+        evic = miss->data;
+        *miss = {++access_count, elem};
       }
     }
   }
