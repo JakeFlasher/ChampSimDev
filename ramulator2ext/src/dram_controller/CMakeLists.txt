@@ -31,16 +31,20 @@ target_sources(
   impl/plugin/trace_recorder.cpp
   impl/plugin/cmd_counter.cpp
   impl/plugin/para.cpp
+  impl/plugin/para_pf.cpp
   impl/plugin/graphene.cpp
   impl/plugin/oracle_rh.cpp
   impl/plugin/twice.cpp
   impl/plugin/hydra.cpp
+  impl/plugin/hydra_pf.cpp
   impl/plugin/rrs.cpp
   impl/plugin/aqua.cpp
   impl/plugin/rfm_manager.cpp
+  impl/plugin/rfm_manager_pf.cpp
   impl/plugin/champsim_plugin.cpp
   impl/plugin/hammer_counter.cpp
   impl/plugin/activate_counter.cpp
+  impl/plugin/back_off.cpp
 
   impl/plugin/blockhammer/blockhammer_throttler.h 
   impl/plugin/blockhammer/blockhammer_util.h 

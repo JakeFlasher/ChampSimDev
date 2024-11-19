@@ -218,6 +218,8 @@ void MEMORY_CONTROLLER::return_packet_rq_rr(Ramulator::Request& req, DRAM_CHANNE
   response_type response{pkt.address, pkt.v_address, pkt.data,
                         pkt.pf_metadata, pkt.instr_depend_on_me};
 
+  response.back_off = req.back_off;
+
   for (auto* ret : pkt.to_return) {
     ret->push_back(response);
   }

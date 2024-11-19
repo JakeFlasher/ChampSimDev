@@ -43,12 +43,17 @@ class PRADRAMController final : public IBHDRAMController, public Implementation 
     uint64_t s_prefetch_row_hits = 0;
     uint64_t s_prefetch_row_misses = 0;
 
+    float m_w_back_off_cap = 0;
+    float m_r_back_off_cap = 0;
+
   public:
     void init() override {
       m_invalidate_ctr = 0;
       m_wr_low_watermark =  param<float>("wr_low_watermark").desc("Threshold for switching back to read mode.").default_val(0.2f);
       m_wr_high_watermark = param<float>("wr_high_watermark").desc("Threshold for switching to write mode.").default_val(0.8f);
       m_prefetch_starve = param<uint64_t>("prefetch_starve_cycles").desc("# of cycles to wait before forcibly serving a prefetch").default_val(50);
+      m_r_back_off_cap = param<float>("r_back_off_thresh").desc("Capacity of queue before signalling back off").default_val(0.8f);
+      m_w_back_off_cap = param<float>("w_back_off_thresh").desc("Capacity of queue before signalling back off").default_val(0.8f);
 
       m_scheduler = create_child_ifce<IBHScheduler>();
       m_refresh = create_child_ifce<IRefreshManager>();
@@ -199,6 +204,10 @@ class PRADRAMController final : public IBHDRAMController, public Implementation 
 
           if (req.callback) {
             // If the request comes from outside (e.g., processor), call its callback
+            if((m_read_buffer.size() > (m_read_buffer.max_size * m_r_back_off_cap)) ||  (m_write_buffer.size() > (m_write_buffer.max_size * m_w_back_off_cap))) {
+              req.back_off = true;
+              //fmt::print("r: {} w: {}\n",m_read_buffer.size(), m_write_buffer.size());
+            }
             req.callback(req);
           }
           // Finally, remove this request from the pending queue

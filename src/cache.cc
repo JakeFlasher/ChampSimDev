@@ -31,6 +31,9 @@
 #include "util/algorithm.h"
 #include "util/bits.h"
 #include "util/span.h"
+#include "../prefetcher/next_line/next_line.h"
+#include "../prefetcher/tcp_stride/tcp_stride.h"
+#include "../prefetcher/spp_tcp/spp_tcp.h"
 
 CACHE::CACHE(CACHE&& other)
     : operable(other),
@@ -94,12 +97,13 @@ auto CACHE::operator=(CACHE&& other) -> CACHE&
 
 CACHE::tag_lookup_type::tag_lookup_type(const request_type& req, bool local_pref, bool skip)
     : address(req.address), v_address(req.v_address), data(req.data), ip(req.ip), instr_id(req.instr_id), pf_metadata(req.pf_metadata), cpu(req.cpu),
+      back_off(req.back_off),
       type(req.type), prefetch_from_this(local_pref), skip_fill(skip), is_translated(req.is_translated), instr_depend_on_me(req.instr_depend_on_me)
 {
 }
 
 CACHE::mshr_type::mshr_type(const tag_lookup_type& req, champsim::chrono::clock::time_point _time_enqueued)
-    : address(req.address), v_address(req.v_address), ip(req.ip), instr_id(req.instr_id), cpu(req.cpu), type(req.type),
+    : address(req.address), v_address(req.v_address), ip(req.ip), instr_id(req.instr_id), cpu(req.cpu), type(req.type), back_off(req.back_off),
       prefetch_from_this(req.prefetch_from_this), time_enqueued(_time_enqueued), instr_depend_on_me(req.instr_depend_on_me), to_return(req.to_return)
 {
 }
@@ -215,6 +219,12 @@ bool CACHE::handle_fill(const mshr_type& fill_mshr)
   if (way != set_end && way->valid) {
     evicting_address = module_address(*way);
   }
+  if(NAME.find("L2C"))
+  if(fill_mshr.type == access_type::PREFETCH)
+  if(fill_mshr.back_off) {
+    tcp_stride::back_off(module_address(fill_mshr),fill_mshr.cpu);
+    spp_tcp::back_off(module_address(fill_mshr),fill_mshr.cpu);
+  }
 
   auto metadata_thru = impl_prefetcher_cache_fill(module_address(fill_mshr), get_set_index(fill_mshr.address), way_idx,
                                                   (fill_mshr.type == access_type::PREFETCH), evicting_address, fill_mshr.data_promise->pf_metadata);
@@ -301,6 +311,7 @@ auto CACHE::mshr_and_forward_packet(const tag_lookup_type& handle_pkt) -> std::p
   fwd_pkt.type = (handle_pkt.type == access_type::WRITE) ? access_type::RFO : handle_pkt.type;
   fwd_pkt.pf_metadata = handle_pkt.pf_metadata;
   fwd_pkt.cpu = handle_pkt.cpu;
+  fwd_pkt.back_off = handle_pkt.back_off;
 
   fwd_pkt.address = handle_pkt.address;
   fwd_pkt.v_address = handle_pkt.v_address;
@@ -617,6 +628,9 @@ void CACHE::finish_packet(const response_type& packet)
   // MSHR holds the most updated information about this request
   mshr_type::returned_value finished_value{packet.data, packet.pf_metadata};
   mshr_entry->data_promise = champsim::waitable{finished_value, current_time + (warmup ? champsim::chrono::clock::duration{} : FILL_LATENCY)};
+
+  mshr_entry->back_off = packet.back_off;
+
   if constexpr (champsim::debug_print) {
     fmt::print("[{}_MSHR] finish_packet instr_id: {} address: {} data: {} type: {} current: {}\n", this->NAME, mshr_entry->instr_id, mshr_entry->address,
                mshr_entry->data_promise->data, access_type_names.at(champsim::to_underlying(mshr_entry->type)), current_time.time_since_epoch() / clock_period);
@@ -670,6 +684,7 @@ void CACHE::issue_translation(tag_lookup_type& q_entry) const
     fwd_pkt.data = q_entry.data;
     fwd_pkt.instr_id = q_entry.instr_id;
     fwd_pkt.ip = q_entry.ip;
+    fwd_pkt.back_off = q_entry.back_off;
 
     fwd_pkt.instr_depend_on_me = q_entry.instr_depend_on_me;
     fwd_pkt.is_translated = true;

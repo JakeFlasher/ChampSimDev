@@ -27,6 +27,8 @@ struct Request {
 
   bool is_prefetch = false;
 
+  bool back_off = false;
+
   int command = -1;          // The command that need to be issued to progress the request
   int final_command = -1;    // The final command that is needed to finish the request
   bool is_stat_updated = false; // Memory controller stats
