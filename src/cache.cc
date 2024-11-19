@@ -31,9 +31,7 @@
 #include "util/algorithm.h"
 #include "util/bits.h"
 #include "util/span.h"
-#include "../prefetcher/next_line/next_line.h"
 #include "../prefetcher/tcp_stride/tcp_stride.h"
-#include "../prefetcher/spp_tcp/spp_tcp.h"
 
 CACHE::CACHE(CACHE&& other)
     : operable(other),
@@ -223,7 +221,7 @@ bool CACHE::handle_fill(const mshr_type& fill_mshr)
   if(fill_mshr.type == access_type::PREFETCH)
   if(fill_mshr.back_off) {
     tcp_stride::back_off(module_address(fill_mshr),fill_mshr.cpu);
-    spp_tcp::back_off(module_address(fill_mshr),fill_mshr.cpu);
+    //spp_tcp::back_off(module_address(fill_mshr),fill_mshr.cpu);
   }
 
   auto metadata_thru = impl_prefetcher_cache_fill(module_address(fill_mshr), get_set_index(fill_mshr.address), way_idx,

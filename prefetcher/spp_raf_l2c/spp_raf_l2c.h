@@ -67,6 +67,14 @@ class spp_raf_l2c : public champsim::modules::prefetcher {
   constexpr static unsigned RAD_WAYS = 4;
   constexpr static unsigned RAD_VECTOR = DRAM_BLOCK_COLUMNS;
 
+  //bloom filter stuff
+  constexpr static unsigned BLOOM_LEVELS = 3;
+  constexpr static unsigned BLOOM_BIT_DEPTH = 2;
+  constexpr static unsigned BLOOM_ENTRIES = 512;
+
+  //act counter stuff
+  constexpr static unsigned RFM_THRESH = 32;
+
   // Global register parameters
   constexpr static unsigned GLOBAL_COUNTER_BIT = 10;
   constexpr static uint32_t GLOBAL_COUNTER_MAX = ((1 << GLOBAL_COUNTER_BIT) - 1);
@@ -77,7 +85,6 @@ class spp_raf_l2c : public champsim::modules::prefetcher {
   public:
     static std::vector<spp_raf_l2c*> spp_impls;
 
-
   
   enum FILTER_REQUEST { SPP_L2C_PREFETCH, SPP_LLC_PREFETCH, L2C_DEMAND, L2C_EVICT }; // Request type for prefetch filter
   static uint64_t get_hash(uint64_t key);
@@ -86,6 +93,87 @@ class spp_raf_l2c : public champsim::modules::prefetcher {
     block_in_page_extent() : dynamic_extent(champsim::data::bits{LOG2_PAGE_SIZE}, champsim::data::bits{LOG2_BLOCK_SIZE}) {}
   };
   using offset_type = champsim::address_slice<block_in_page_extent>;
+
+  class ACT_COUNTER
+  {
+    std::vector<uint64_t> counter;
+    public:
+    ACT_COUNTER() : counter(DRAM_GROUPS,0){};
+
+    bool increment(unsigned long entry) {
+      entry = entry % DRAM_GROUPS;
+      counter[entry]++;
+      if(counter[entry] >= RFM_THRESH){
+        for (auto it = counter.begin(); it != counter.end(); it++)
+          (*it) = 0;
+        
+        fmt::print("reset act counter\n");
+        return true;
+      }
+      return false;
+    }
+  };
+  class BLOOM_FILTER
+  {
+    std::vector<std::vector<unsigned>> filters;
+    private:
+      uint64_t calc_hash(unsigned level, uint64_t addr) {
+        uint64_t rolling_hash_a = 0;
+        uint64_t rolling_hash_b = 0;
+        uint64_t naddr = ~addr;
+        for(unsigned i = 0; i <= level; i++) {
+          if(i % 2 == 0) {
+            rolling_hash_a += get_hash(addr >> ((i/2)*4));
+          }
+          else {
+            rolling_hash_b += get_hash(naddr >> ((i/2)*4));
+          }
+        }
+        //fmt::print("hash{} : {}\n",level,rolling_hash_a + rolling_hash_b);
+        
+        return(rolling_hash_a + rolling_hash_b);
+      }
+    public:
+      void reset() {
+        for(unsigned i = 0; i < BLOOM_LEVELS; i++) {
+          for(auto it = filters[i].begin(); it != filters[i].end(); it++) {
+            (*it) = 0;
+          }
+        }
+      }
+      void set(champsim::address addr) {
+        for(unsigned i = 0; i < BLOOM_LEVELS; i++) {
+          uint64_t hash = calc_hash(i,addr.to<uint64_t>()) % BLOOM_ENTRIES;
+          if(filters[i][hash] < (1 << BLOOM_BIT_DEPTH) - 1)
+            filters[i][hash]++;
+        }
+      }
+      bool check(champsim::address addr) {
+        bool filtered = true;
+        for(unsigned i = 0; i < BLOOM_LEVELS; i++) {
+          uint64_t hash = calc_hash(i,addr.to<uint64_t>()) % BLOOM_ENTRIES;
+          //fmt::print("hash: {}\n",hash);
+          if(filters[i][hash] < (1 << BLOOM_BIT_DEPTH) - 1)
+            filtered = false;
+        }
+        //fmt::print("filtered: {}\n",filtered);
+        return(filtered);
+      }
+
+      BLOOM_FILTER() {
+        for(unsigned i = 0; i < BLOOM_LEVELS; i++) {
+          std::vector<unsigned> bf(BLOOM_ENTRIES,0);
+          filters.push_back(bf);
+        }
+      }
+
+      void print() {
+        for(unsigned i = 0; i < BLOOM_LEVELS; i++) {
+          fmt::print("LEVEL:{}\n",i);
+          fmt::print("\t[{}]\n",fmt::join(filters[i],","));
+        }
+      }
+  };
 
   class SIGNATURE_TABLE
   {
@@ -209,6 +297,8 @@ class spp_raf_l2c : public champsim::modules::prefetcher {
     champsim::msl::lru_table<ram_table_entry,ram_indexer,ram_indexer> nram_table{NRAM_SETS,NRAM_WAYS};
 
     champsim::msl::lru_table<rat_table_entry,rat_set_indexer,rat_way_indexer> rat_table{RAT_SETS,RAT_WAYS};
+    BLOOM_FILTER rat_bloom_filter;
+    ACT_COUNTER rat_act_counter;
 
     champsim::msl::lru_table<rad_table_entry,rad_set_indexer,rad_way_indexer> rad_table{RAD_SETS,RAD_WAYS};
 
@@ -236,8 +326,9 @@ class spp_raf_l2c : public champsim::modules::prefetcher {
     void reset_nram_table(champsim::address pf_addr);
     bool check_nram_table(champsim::address pf_addr);
 
-    void set_rat_table(champsim::address pf_addr);
-    bool check_rat_table(champsim::address pf_addr);
+    void set_rat_table(champsim::address addr, bool is_prefetch);
+    //bool check_rat_table(champsim::address pf_addr);
+    bool filter_prefetch_rat(champsim::address addr);
 
     void add_rad_table(champsim::address pf_addr, bool fill_this_level, uint32_t metadata);
     void thresh_issue_rad_table(rad_table_entry rte);

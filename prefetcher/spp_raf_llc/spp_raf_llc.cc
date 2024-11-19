@@ -10,7 +10,7 @@ uint32_t spp_raf_llc::prefetcher_cache_operate(champsim::address addr, champsim:
   for(auto spp_l2c : spp_raf_l2c::spp_impls)
   {
       //spp_l2c->FILTER.set_ram_table(addr);
-      //spp_l2c->FILTER.set_rat_table(addr);
+      spp_l2c->FILTER.set_rat_table(addr, type == access_type::PREFETCH);
       //if(type == access_type::PREFETCH)
       //  spp_l2c->FILTER.set_nram_table(addr);
   }
