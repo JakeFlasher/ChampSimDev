@@ -1,6 +1,14 @@
 #include "spp_raf_llc.h"
 #include "../prefetcher/spp_raf_l2c/spp_raf_l2c.h"
 
+
+
+void spp_raf_llc::mitigation_issued(champsim::address addr) {
+  //fmt::print("got mitigation at addr: {}\n",addr);
+  for(auto spp_l2c : spp_raf_l2c::spp_impls) {
+    spp_l2c->FILTER.reset_filter(addr);
+  }
+}
 uint32_t spp_raf_llc::prefetcher_cache_operate(champsim::address addr, champsim::address ip, uint8_t cache_hit, bool useful_prefetch, access_type type,
                                              uint32_t metadata_in)
 {

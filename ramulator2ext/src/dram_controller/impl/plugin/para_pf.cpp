@@ -26,6 +26,8 @@ class PARA_PF : public IControllerPlugin, public Implementation {
     int m_bank_level = -1;
     int m_row_level = -1;
 
+    bool ignore_prefetch;
+
   public:
     void init() override { 
       m_pr_threshold = param<float>("threshold").desc("Probability threshold for issuing neighbor row refresh").required();
@@ -37,6 +39,8 @@ class PARA_PF : public IControllerPlugin, public Implementation {
       m_distribution = std::uniform_real_distribution<float>(0.0, 1.0);
 
       m_is_debug = param<bool>("debug").default_val(false);
+
+      ignore_prefetch = param<bool>("ignore_prefetch").default_val(false);
     };
 
     void setup(IFrontEnd* frontend, IMemorySystem* memory_system) override {
@@ -53,7 +57,7 @@ class PARA_PF : public IControllerPlugin, public Implementation {
     };
 
     void update(bool request_found, ReqBuffer::iterator& req_it) override {
-      if (request_found && !req_it->is_prefetch) {
+      if (request_found && !(req_it->is_prefetch && ignore_prefetch)) {
         if (
           m_dram->m_command_meta(req_it->command).is_opening && 
           m_dram->m_command_scopes(req_it->command) == m_row_level

@@ -113,6 +113,7 @@ class Hydra_PF : public IControllerPlugin, public Implementation {
     int s_rctct_check = 0;
 
     bool m_is_debug;
+    bool ignore_prefetch;
 
   public:
     void init() override { 
@@ -123,6 +124,7 @@ class Hydra_PF : public IControllerPlugin, public Implementation {
       m_rcc_num_per_rank = param<int>("hydra_rcc_num_per_rank").default_val(4096);
       m_rcc_policy = param<std::string>("hydra_rcc_policy").default_val("RANDOM");
       m_is_debug = param<bool>("debug").default_val(false);
+      ignore_prefetch = param<bool>("ignore_prefetch").default_val(false);
     };
 
     void setup(IFrontEnd* frontend, IMemorySystem* memory_system) override {
@@ -275,7 +277,7 @@ class Hydra_PF : public IControllerPlugin, public Implementation {
         }
       }
 
-      if (request_found && !req_it->is_prefetch){
+      if (request_found && !(req_it->is_prefetch && ignore_prefetch)){
         if (m_dram->m_command_meta(req_it->command).is_opening && m_dram->m_command_scopes(req_it->command) == m_row_level){
           int flat_bank_id = req_it->addr_vec[m_bank_level];
           int accumulated_dimension = 1;

@@ -475,20 +475,32 @@ void spp_raf_l2c::PREFETCH_FILTER::set_rat_table(champsim::address addr, bool is
   if(!entry.has_value()) {
     rat_table.fill(rat_table_entry{row,rb,_parent->current_cycle});
     //set bloom filter
-    rat_bloom_filter.set(champsim::address{(row << DRAM_GROUPS) + rb});
+    if(is_prefetch)
+    rat_bloom_filter.set(rb,champsim::address{row});
     //update activation counters
-    if(rat_act_counter.increment(rb))
-      rat_bloom_filter.reset();
+    //if(rat_act_counter.increment(rb))
+    //  rat_bloom_filter.reset(rb);
   }
+}
+
+void spp_raf_l2c::PREFETCH_FILTER::reset_filter(champsim::address addr) {
+  unsigned long row = MEMORY_CONTROLLER::DRAM_CONTROLLER.value()->dram_get_row(addr);
+  unsigned long rb = raf_rb(addr);
+  //fmt::print("reset for addr: {}\n",addr);
+  rat_bloom_filter.reset(rb);
 }
 
 bool spp_raf_l2c::PREFETCH_FILTER::filter_prefetch_rat(champsim::address addr) {
   //check bloom filter. If saturated for given entries, filter out
-  bool filter = rat_bloom_filter.check(addr);
+  unsigned long row = MEMORY_CONTROLLER::DRAM_CONTROLLER.value()->dram_get_row(addr);
+  unsigned long rb = raf_rb(addr);
+  bool filter = false;
+  if(!rat_table.check_hit(rat_table_entry{row,rb,0}).has_value())
+    filter = rat_bloom_filter.check(rb,champsim::address{row});
   if(filter)
     filtered++;
   total++;
-  //return(false);
+  
   return(filter);
 }
 

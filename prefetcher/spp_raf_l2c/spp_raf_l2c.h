@@ -70,10 +70,10 @@ class spp_raf_l2c : public champsim::modules::prefetcher {
   //bloom filter stuff
   constexpr static unsigned BLOOM_LEVELS = 3;
   constexpr static unsigned BLOOM_BIT_DEPTH = 2;
-  constexpr static unsigned BLOOM_ENTRIES = 512;
+  constexpr static unsigned BLOOM_ENTRIES = 64;
 
   //act counter stuff
-  constexpr static unsigned RFM_THRESH = 32;
+  constexpr static unsigned RFM_THRESH = 16;
 
   // Global register parameters
   constexpr static unsigned GLOBAL_COUNTER_BIT = 10;
@@ -134,6 +134,12 @@ class spp_raf_l2c : public champsim::modules::prefetcher {
         return(rolling_hash_a + rolling_hash_b);
       }
     public:
+      void reset(champsim::address addr) {
+        for(unsigned i = 0; i < BLOOM_LEVELS; i++) {
+          uint64_t hash = calc_hash(i,addr.to<uint64_t>()) % BLOOM_ENTRIES;
+          filters[i][hash] = 0;
+        }
+      }
       void reset() {
         for(unsigned i = 0; i < BLOOM_LEVELS; i++) {
           for(auto it = filters[i].begin(); it != filters[i].end(); it++) {
@@ -174,7 +180,30 @@ class spp_raf_l2c : public champsim::modules::prefetcher {
         }
       }
   };
+  class TABLE_BLOOM_FILTER
+  {
+    std::vector<BLOOM_FILTER> bloom_filters;
+    public:
 
+    TABLE_BLOOM_FILTER(): bloom_filters(DRAM_GROUPS) {};
+
+    void set(unsigned long row_buffer, champsim::address row) {
+      bloom_filters[row_buffer % DRAM_GROUPS].set(row);
+    }
+
+    bool check(unsigned long row_buffer, champsim::address row) {
+      return bloom_filters[row_buffer % DRAM_GROUPS].check(row);
+    }
+
+    void reset(unsigned long row_buffer) {
+      bloom_filters[row_buffer % DRAM_GROUPS].reset();
+    }
+
+    void print() {
+      for(auto& bf : bloom_filters)
+        bf.print();
+    }
+  };
   class SIGNATURE_TABLE
   {
     struct tag_extent : champsim::dynamic_extent {
@@ -297,7 +326,7 @@ class spp_raf_l2c : public champsim::modules::prefetcher {
     champsim::msl::lru_table<ram_table_entry,ram_indexer,ram_indexer> nram_table{NRAM_SETS,NRAM_WAYS};
 
     champsim::msl::lru_table<rat_table_entry,rat_set_indexer,rat_way_indexer> rat_table{RAT_SETS,RAT_WAYS};
-    BLOOM_FILTER rat_bloom_filter;
+    TABLE_BLOOM_FILTER rat_bloom_filter;
     ACT_COUNTER rat_act_counter;
 
     champsim::msl::lru_table<rad_table_entry,rad_set_indexer,rad_way_indexer> rad_table{RAD_SETS,RAD_WAYS};
@@ -329,6 +358,7 @@ class spp_raf_l2c : public champsim::modules::prefetcher {
     void set_rat_table(champsim::address addr, bool is_prefetch);
     //bool check_rat_table(champsim::address pf_addr);
     bool filter_prefetch_rat(champsim::address addr);
+    void reset_filter(champsim::address addr);
 
     void add_rad_table(champsim::address pf_addr, bool fill_this_level, uint32_t metadata);
     void thresh_issue_rad_table(rad_table_entry rte);

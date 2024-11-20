@@ -32,6 +32,7 @@
 #include "util/bits.h"
 #include "util/span.h"
 #include "../prefetcher/tcp_stride/tcp_stride.h"
+#include "../prefetcher/spp_raf_llc/spp_raf_llc.h"
 
 CACHE::CACHE(CACHE&& other)
     : operable(other),
@@ -223,6 +224,9 @@ bool CACHE::handle_fill(const mshr_type& fill_mshr)
     tcp_stride::back_off(module_address(fill_mshr),fill_mshr.cpu);
     //spp_tcp::back_off(module_address(fill_mshr),fill_mshr.cpu);
   }
+
+  if(fill_mshr.back_off)
+    spp_raf_llc::mitigation_issued(module_address(fill_mshr));
 
   auto metadata_thru = impl_prefetcher_cache_fill(module_address(fill_mshr), get_set_index(fill_mshr.address), way_idx,
                                                   (fill_mshr.type == access_type::PREFETCH), evicting_address, fill_mshr.data_promise->pf_metadata);

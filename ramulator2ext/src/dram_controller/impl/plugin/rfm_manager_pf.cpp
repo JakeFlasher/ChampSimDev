@@ -34,10 +34,13 @@ private:
 
     int s_rfm_counter = 0;
 
+    bool ignore_prefetch = false;
+
 public:
     void init() override { 
         m_rfm_thresh = param<int>("rfm_thresh").default_val(80);
         m_debug = param<bool>("debug").default_val(false);
+        ignore_prefetch = param<bool>("ignore_prefetch").default_val(false);
     }
 
     void setup(IFrontEnd* frontend, IMemorySystem* memory_system) override {
@@ -79,7 +82,7 @@ public:
         if (!request_found) {
             return;
         }
-        if(req_it->is_prefetch) {
+        if(req_it->is_prefetch && ignore_prefetch) {
             return;
         }
 
@@ -113,7 +116,7 @@ public:
         for (int i = 0; i < m_bank_ctrs.size(); i++) {
             m_bank_ctrs[i] = 0;
         }
-
+        req_it->back_off = true;
         Request rfm(req.addr_vec, m_rfm_req_id);
         rfm.addr_vec[m_bankgroup_level] = -1;
         rfm.addr_vec[m_bank_level] = -1;
