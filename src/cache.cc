@@ -32,7 +32,7 @@
 #include "util/bits.h"
 #include "util/span.h"
 #include "../prefetcher/tcp_stride/tcp_stride.h"
-#include "../prefetcher/spp_raf_llc/spp_raf_llc.h"
+#include "../prefetcher/spp_raf_l2c/spp_raf_l2c.h"
 
 CACHE::CACHE(CACHE&& other)
     : operable(other),
@@ -96,13 +96,13 @@ auto CACHE::operator=(CACHE&& other) -> CACHE&
 
 CACHE::tag_lookup_type::tag_lookup_type(const request_type& req, bool local_pref, bool skip)
     : address(req.address), v_address(req.v_address), data(req.data), ip(req.ip), instr_id(req.instr_id), pf_metadata(req.pf_metadata), cpu(req.cpu),
-      back_off(req.back_off),
+      back_off(req.back_off), row_act(req.row_act),
       type(req.type), prefetch_from_this(local_pref), skip_fill(skip), is_translated(req.is_translated), instr_depend_on_me(req.instr_depend_on_me)
 {
 }
 
 CACHE::mshr_type::mshr_type(const tag_lookup_type& req, champsim::chrono::clock::time_point _time_enqueued)
-    : address(req.address), v_address(req.v_address), ip(req.ip), instr_id(req.instr_id), cpu(req.cpu), type(req.type), back_off(req.back_off),
+    : address(req.address), v_address(req.v_address), ip(req.ip), instr_id(req.instr_id), cpu(req.cpu), type(req.type), back_off(req.back_off), row_act(req.row_act),
       prefetch_from_this(req.prefetch_from_this), time_enqueued(_time_enqueued), instr_depend_on_me(req.instr_depend_on_me), to_return(req.to_return)
 {
 }
@@ -218,15 +218,24 @@ bool CACHE::handle_fill(const mshr_type& fill_mshr)
   if (way != set_end && way->valid) {
     evicting_address = module_address(*way);
   }
-  if(NAME.find("L2C"))
-  if(fill_mshr.type == access_type::PREFETCH)
-  if(fill_mshr.back_off) {
-    tcp_stride::back_off(module_address(fill_mshr),fill_mshr.cpu);
-    //spp_tcp::back_off(module_address(fill_mshr),fill_mshr.cpu);
+  if(NAME == "LLC") {
+      if(fill_mshr.type == access_type::PREFETCH)
+      if(fill_mshr.back_off) {
+        tcp_stride::back_off(module_address(fill_mshr),fill_mshr.cpu);
+        //spp_tcp::back_off(module_address(fill_mshr),fill_mshr.cpu);
+      }
+      //broadcast row act
+      if(fill_mshr.row_act) {
+        for (auto spp : spp_raf_l2c::spp_impls) {
+          spp->FILTER.set_rat_table(module_address(fill_mshr),fill_mshr.type == access_type::PREFETCH);
+        }
+      }
+      if(fill_mshr.back_off) {
+        for(auto spp_l2c : spp_raf_l2c::spp_impls) {
+          spp_l2c->FILTER.reset_filter(module_address(fill_mshr));
+      }
+    }
   }
-
-  if(fill_mshr.back_off)
-    spp_raf_llc::mitigation_issued(module_address(fill_mshr));
 
   auto metadata_thru = impl_prefetcher_cache_fill(module_address(fill_mshr), get_set_index(fill_mshr.address), way_idx,
                                                   (fill_mshr.type == access_type::PREFETCH), evicting_address, fill_mshr.data_promise->pf_metadata);
@@ -314,6 +323,7 @@ auto CACHE::mshr_and_forward_packet(const tag_lookup_type& handle_pkt) -> std::p
   fwd_pkt.pf_metadata = handle_pkt.pf_metadata;
   fwd_pkt.cpu = handle_pkt.cpu;
   fwd_pkt.back_off = handle_pkt.back_off;
+  fwd_pkt.row_act = handle_pkt.row_act;
 
   fwd_pkt.address = handle_pkt.address;
   fwd_pkt.v_address = handle_pkt.v_address;
@@ -632,6 +642,7 @@ void CACHE::finish_packet(const response_type& packet)
   mshr_entry->data_promise = champsim::waitable{finished_value, current_time + (warmup ? champsim::chrono::clock::duration{} : FILL_LATENCY)};
 
   mshr_entry->back_off = packet.back_off;
+  mshr_entry->row_act = packet.row_act;
 
   if constexpr (champsim::debug_print) {
     fmt::print("[{}_MSHR] finish_packet instr_id: {} address: {} data: {} type: {} current: {}\n", this->NAME, mshr_entry->instr_id, mshr_entry->address,
@@ -687,6 +698,7 @@ void CACHE::issue_translation(tag_lookup_type& q_entry) const
     fwd_pkt.instr_id = q_entry.instr_id;
     fwd_pkt.ip = q_entry.ip;
     fwd_pkt.back_off = q_entry.back_off;
+    fwd_pkt.row_act = q_entry.row_act;
 
     fwd_pkt.instr_depend_on_me = q_entry.instr_depend_on_me;
     fwd_pkt.is_translated = true;

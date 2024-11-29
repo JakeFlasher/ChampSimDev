@@ -54,6 +54,7 @@ class channel
     bool is_translated = true;
     bool response_requested = true;
     bool back_off = false;
+    bool row_act = false;
 
     uint8_t asid[2] = {std::numeric_limits<uint8_t>::max(), std::numeric_limits<uint8_t>::max()};
     access_type type{access_type::LOAD};
@@ -72,6 +73,7 @@ class channel
 
   struct response {
     bool back_off = false;
+    bool row_act = false;
     champsim::address address{};
     champsim::address v_address{};
     champsim::address data{};

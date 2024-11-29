@@ -69,11 +69,18 @@ class spp_raf_l2c : public champsim::modules::prefetcher {
 
   //bloom filter stuff
   constexpr static unsigned BLOOM_LEVELS = 3;
-  constexpr static unsigned BLOOM_BIT_DEPTH = 2;
-  constexpr static unsigned BLOOM_ENTRIES = 64;
+  constexpr static unsigned BLOOM_BIT_DEPTH = 1;
+  constexpr static unsigned BLOOM_ENTRIES = 150;
+  constexpr static unsigned SAC_LIMIT = 512;
 
   //act counter stuff
   constexpr static unsigned RFM_THRESH = 16;
+
+  //probabilistic approach
+  constexpr static float BLOOM_SET_PROB = 0.01;
+  constexpr static float BLOOM_RESET_PROB = 0.01;
+
+  constexpr static unsigned BLOOM_RESET_INTERVAL_MS = 32;
 
   // Global register parameters
   constexpr static unsigned GLOBAL_COUNTER_BIT = 10;
@@ -111,6 +118,56 @@ class spp_raf_l2c : public champsim::modules::prefetcher {
         return true;
       }
       return false;
+    }
+  };
+
+  template<std::size_t cap>
+  class PREFETCH_QUEUE
+  {
+    std::deque<std::pair<bool,champsim::address>> to_prefetch;
+    public:
+    void push(champsim::address a, bool prefetch_this_level) {
+      if(std::size(to_prefetch) >= cap)
+        return;
+      to_prefetch.push_back({prefetch_this_level,a});
+      //return true;
+    }
+
+    bool is_empty() {
+      return to_prefetch.empty();
+    }
+    std::pair<bool,champsim::address> front() {
+      return to_prefetch.front();
+    }
+    void pop() {
+      to_prefetch.pop_front();
+    }
+  };
+  class SATURATING_ACT_COUNTER
+  {
+    std::vector<uint64_t> counter;
+    public:
+    SATURATING_ACT_COUNTER() : counter(DRAM_GROUPS,0){};
+
+    bool check(unsigned long entry) {
+      entry = entry % DRAM_GROUPS;
+      if(counter[entry] >= SAC_LIMIT)
+        return true;
+      return false;
+    }
+    void increment(unsigned long entry) {
+      entry = entry % DRAM_GROUPS;
+      if(counter[entry] < SAC_LIMIT)
+        counter[entry]++;
+    }
+
+    void reset(unsigned long entry) {
+      entry = entry % DRAM_GROUPS;
+      counter[entry] = 0;
+    }
+
+    void print() {
+      fmt::print("\t[{}]\n",fmt::join(counter,","));
     }
   };
   class BLOOM_FILTER
@@ -197,6 +254,14 @@ class spp_raf_l2c : public champsim::modules::prefetcher {
 
     void reset(unsigned long row_buffer) {
       bloom_filters[row_buffer % DRAM_GROUPS].reset();
+    }
+    void reset(unsigned long row_buffer, champsim::address row) {
+      bloom_filters[row_buffer % DRAM_GROUPS].reset(row);
+    }
+
+    void reset_all() {
+      for(auto& bf : bloom_filters)
+        bf.reset();
     }
 
     void print() {
@@ -328,6 +393,8 @@ class spp_raf_l2c : public champsim::modules::prefetcher {
     champsim::msl::lru_table<rat_table_entry,rat_set_indexer,rat_way_indexer> rat_table{RAT_SETS,RAT_WAYS};
     TABLE_BLOOM_FILTER rat_bloom_filter;
     ACT_COUNTER rat_act_counter;
+    SATURATING_ACT_COUNTER rat_sact_counter;
+    uint64_t reset_timer = 0;
 
     champsim::msl::lru_table<rad_table_entry,rad_set_indexer,rad_way_indexer> rad_table{RAD_SETS,RAD_WAYS};
 
@@ -415,6 +482,7 @@ class spp_raf_l2c : public champsim::modules::prefetcher {
   PATTERN_TABLE PT;
   PREFETCH_FILTER FILTER;
   GLOBAL_REGISTER GHR;
+  PREFETCH_QUEUE<128> PQ;
 
   using prefetcher::prefetcher;
   uint32_t prefetcher_cache_operate(champsim::address addr, champsim::address ip, uint8_t cache_hit, bool useful_prefetch, access_type type,

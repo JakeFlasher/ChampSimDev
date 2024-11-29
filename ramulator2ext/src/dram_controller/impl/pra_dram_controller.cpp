@@ -314,6 +314,7 @@ class PRADRAMController final : public IBHDRAMController, public Implementation 
           if (req_meta.is_opening) {
             s_core_row_misses[source_id] += increment;
             s_num_row_misses++;
+            req_it->row_act = true;
             if(req_it->is_prefetch)
               s_prefetch_row_misses++;
           }

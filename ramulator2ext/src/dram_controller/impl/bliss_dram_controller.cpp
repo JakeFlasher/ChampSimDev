@@ -281,6 +281,7 @@ class BLISSDRAMController final : public IBHDRAMController, public Implementatio
             s_num_row_hits++;
           }
           if (req_meta.is_opening) {
+            req_it->row_act = true;
             s_core_row_misses[source_id] += increment;
             s_num_row_misses++;
           }
