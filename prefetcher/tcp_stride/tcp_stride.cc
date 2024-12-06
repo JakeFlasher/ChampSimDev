@@ -10,11 +10,11 @@ uint32_t tcp_stride::prefetcher_cache_operate(champsim::address addr, champsim::
   champsim::block_number cl_addr{addr};
   champsim::block_number::difference_type stride = 0;
 
-  if(llc_filter.check_hit(llc_entry{cl_addr,0}).has_value()) {
-    table_hits++;
-  }
-  else
-    table_misses++;
+  //if(llc_filter.check_hit(llc_entry{cl_addr,0}).has_value()) {
+  //  table_hits++;
+  //}
+  //else
+  //  table_misses++;
 
 
   auto found = table.check_hit({ip, cl_addr, stride});
@@ -32,18 +32,18 @@ uint32_t tcp_stride::prefetcher_cache_operate(champsim::address addr, champsim::
     }
     return (rhs.value().degree > lhs.value().degree);
   };
-// if we found a matching entry
-if (found.has_value()) {
-  stride = champsim::offset(found->last_cl_addr, cl_addr);
+  // if we found a matching entry
+  if (found.has_value()) {
+    stride = champsim::offset(found->last_cl_addr, cl_addr);
 
-  // Initialize prefetch state unless we somehow saw the same address twice in
-  // a row or if this is the first time we've seen this stride
-  if (stride != 0 && stride == found->last_stride) {
-    auto al = std::min_element(active_lookahead.begin(),active_lookahead.end(),best_entry);
+    // Initialize prefetch state unless we somehow saw the same address twice in
+    // a row or if this is the first time we've seen this stride
+    if (stride != 0 && stride == found->last_stride) {
+      auto al = std::min_element(active_lookahead.begin(),active_lookahead.end(),best_entry);
 
-    *al = {champsim::address{cl_addr}, stride, aggression};
+      *al = {champsim::address{cl_addr}, stride, aggression};
+    }
   }
-}
 
   // update tracking set
   table.fill({ip, cl_addr, stride});
