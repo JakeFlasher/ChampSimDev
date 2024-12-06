@@ -10,6 +10,12 @@ uint32_t tcp_stride::prefetcher_cache_operate(champsim::address addr, champsim::
   champsim::block_number cl_addr{addr};
   champsim::block_number::difference_type stride = 0;
 
+  if(llc_filter.check_hit(llc_entry{cl_addr,0}).has_value()) {
+    table_hits++;
+  }
+  else
+    table_misses++;
+
 
   auto found = table.check_hit({ip, cl_addr, stride});
 
@@ -57,39 +63,43 @@ void tcp_stride::prefetcher_cycle_operate()
 {
   // If a lookahead is active
   //fmt::print("trying lookahead...\n");
-  for(auto it = active_lookahead.begin(); it != active_lookahead.end(); it++) {
-    if (it->has_value()) {
-      auto [old_pf_address, stride, degree] = it->value();
-      //fmt::print("entry: {} {} {}\n",old_pf_address,stride,degree);
-      if(degree > 0) {
-        champsim::address pf_address{champsim::block_number{old_pf_address} + stride};
+  bool good = false;
+  if(active_lookahead.begin()->has_value()) {
+    auto [old_pf_address, stride, degree] = active_lookahead.begin()->value();
+    //fmt::print("entry: {} {} {}\n",old_pf_address,stride,degree);
+    if(degree > 0) {
+      champsim::address pf_address{champsim::block_number{old_pf_address} + stride};
 
-        // If the next step would exceed the degree or run off the page, stop
-        if (intern_->virtual_prefetch || champsim::page_number{pf_address} == champsim::page_number{old_pf_address}) {
-          // check the MSHR occupancy to decide if we're going to prefetch to this level or not
-          const bool mshr_under_light_load = intern_->get_mshr_occupancy_ratio() < 0.5;
-          const bool success = prefetch_line(pf_address, mshr_under_light_load, 0);
-          if (success)
-            *it = {pf_address, stride, degree - 1};
+      // If the next step would exceed the degree or run off the page, stop
+      if (intern_->virtual_prefetch || champsim::page_number{pf_address} == champsim::page_number{old_pf_address}) {
+        // check the MSHR occupancy to decide if we're going to prefetch to this level or not
+        const bool mshr_under_light_load = intern_->get_mshr_occupancy_ratio() < 0.5;
+        const bool success = filter_prefetch(pf_address) ? true : prefetch_line(pf_address, mshr_under_light_load, 0);
+        if (success)
+          *active_lookahead.begin() = {pf_address, stride, degree - 1};
 
-          // If we fail, try again next cycle
-          if(it->value().degree != 0)
-            continue;
-
+        // If we fail, try again next cycle
+        if(active_lookahead.begin()->value().degree != 0) {
+          good = true;
         }
+
       }
-      it->reset();
     }
+    if(!good)
+      active_lookahead.begin()->reset();
   }
+  std::rotate(active_lookahead.begin(),active_lookahead.begin() + 1,active_lookahead.end());
 
   //aggression modulation
   cycles_so_far++;
 
   if(intern_->current_cycle() % heartbeat_size == 0)
-    fmt::print("hit_rate: {} usefulness: {}\n",(hit_counter / (float)(miss_counter + hit_counter)),((useful_counter + useful_counter_lw + useful_counter_llw) /(float) (pf_fill_counter + pf_fill_counter_lw + pf_fill_counter_llw)));
+    fmt::print("hit_rate: {} usefulness: {} table_hit_ratio: {}\n",(hit_counter / (float)(miss_counter + hit_counter)),((useful_counter + useful_counter_lw + useful_counter_llw) /(float) (pf_fill_counter + pf_fill_counter_lw + pf_fill_counter_llw)),(table_hits/(float)(table_hits + table_misses)));
   if(cycles_so_far >= cycles_per_window) {
     cycles_so_far = 0;
-    if(got_back_off || ((useful_counter + useful_counter_lw + useful_counter_llw) /(float) (pf_fill_counter + pf_fill_counter_lw + pf_fill_counter_llw)) < 0.50) {
+
+    //got explicit back off from DRAM, or usefulness is less than 80% of cache hit rate. Usefulness being the ratio of used cache lines in the last window / # of cache lines brought in by the prefetcher in the last 3 windows
+    if(got_back_off || ((useful_counter + useful_counter_lw + useful_counter_llw) /(float) (pf_fill_counter + pf_fill_counter_lw + pf_fill_counter_llw)) < ((hit_counter / (float)(miss_counter + hit_counter))*0.75)) {
       aggression *= back_off_coeff;
     }
     else {
@@ -111,9 +121,13 @@ void tcp_stride::prefetcher_cycle_operate()
     useful_counter = 0;
     miss_counter = 0;
     hit_counter = 0;
+    table_hits = 0;
+    table_misses = 0;
   }
   if(intern_->current_cycle() % heartbeat_size == 0)
     fmt::print("current aggression: {} average aggression: {}\n",aggression,rolling_aggression/(float)windows);
+
+  total_cycles++;
 }
 
 
@@ -133,4 +147,14 @@ void tcp_stride::back_off(champsim::address addr, uint32_t cpu) {
     if(it->intern_->cpu == cpu)
       it->got_back_off = true;
   }
+}
+
+bool tcp_stride::filter_prefetch(champsim::address addr) {
+  auto entry = llc_filter.check_hit(llc_entry{champsim::block_number{addr},0});
+  if(entry.has_value()) {
+    if(intern_->current_cycle() - entry->first_accessed < LLC_FILTER_TIMEOUT)
+      return true;
+  }
+  llc_filter.fill(llc_entry{champsim::block_number{addr},intern_->current_cycle()});
+  return false;
 }

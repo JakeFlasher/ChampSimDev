@@ -16,6 +16,10 @@ struct tcp_stride : public champsim::modules::prefetcher {
   uint64_t cycles_per_window = 10000;
   uint64_t cycles_so_far = 0;
 
+  uint64_t total_cycles = 0;
+
+  uint64_t table_hits = 0;
+  uint64_t table_misses = 0;
   uint64_t useful_counter = 0;
   uint64_t useful_counter_lw = 0;
   uint64_t useful_counter_llw = 0;
@@ -29,6 +33,10 @@ struct tcp_stride : public champsim::modules::prefetcher {
   uint64_t pf_fill_counter_lllllw = 0;
   uint64_t pf_fill_counter_llllllw = 0;
 
+  constexpr static unsigned LLC_FILTER_SETS = 16;
+  constexpr static unsigned LLC_FILTER_WAYS = 4;
+  constexpr static unsigned LLC_FILTER_TIMEOUT = 150;
+
   uint64_t rolling_aggression = 0;
   uint64_t windows = 0;
 
@@ -38,9 +46,25 @@ struct tcp_stride : public champsim::modules::prefetcher {
 
   float back_off_coeff = 0.9;
   float back_on_coeff = 1;
+
   static std::vector<tcp_stride*> instances;
 
   static void back_off(champsim::address addr, uint32_t cpu);
+
+  struct llc_entry {
+    champsim::block_number block;
+    uint64_t first_accessed;
+
+    llc_entry() : llc_entry(champsim::block_number{0},0) {}
+    explicit llc_entry(champsim::block_number block_, uint64_t first_accessed_) : block(block_), first_accessed(first_accessed_) {}
+  };
+  struct llc_indexer {
+    auto operator()(const llc_entry& entry) const {return entry.block;}
+  };
+
+  champsim::msl::lru_table<llc_entry, llc_indexer, llc_indexer> llc_filter{LLC_FILTER_SETS,LLC_FILTER_WAYS};
+
+  bool filter_prefetch(champsim::address addr);
 
   struct tracker_entry {
     champsim::address ip{};                                // the IP we're tracking
@@ -69,7 +93,7 @@ struct tcp_stride : public champsim::modules::prefetcher {
   constexpr static std::size_t TRACKER_WAYS = 4;
   constexpr static int PREFETCH_DEGREE = 3;
 
-  constexpr static std::size_t ACTIVE_LOOKAHEADS = 2;
+  constexpr static std::size_t ACTIVE_LOOKAHEADS = 8;
 
   std::vector<std::optional<lookahead_entry>> active_lookahead = std::vector<std::optional<lookahead_entry>>(ACTIVE_LOOKAHEADS);
 
