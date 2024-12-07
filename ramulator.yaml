@@ -16,15 +16,16 @@ MemorySystem:
     impl: DDR5-VRR
     RFM:
     org:
-      preset: DDR5_16Gb_x8
+      preset: DDR5_16Gb_x16
       channel: 2
-      rank: 2
+      rank: 1
       channel_width: 32
     timing:
       preset: DDR5_3200AN
 
   BHDRAMController:
-    impl: BLISSDRAMController
+    impl: PRADRAMController
+    prefetch_starve_cycles: 0
     BHScheduler:
       impl: BHScheduler
     RefreshManager:
@@ -43,4 +44,4 @@ MemorySystem:
           rfm_thresh: 16}
 
   AddrMapper:
-    impl: ZEN4
+    impl: ZEN4_8GB

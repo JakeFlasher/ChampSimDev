@@ -51,7 +51,7 @@ class PRADRAMController final : public IBHDRAMController, public Implementation 
       m_invalidate_ctr = 0;
       m_wr_low_watermark =  param<float>("wr_low_watermark").desc("Threshold for switching back to read mode.").default_val(0.2f);
       m_wr_high_watermark = param<float>("wr_high_watermark").desc("Threshold for switching to write mode.").default_val(0.8f);
-      m_prefetch_starve = param<uint64_t>("prefetch_starve_cycles").desc("# of cycles to wait before forcibly serving a prefetch").default_val(50);
+      m_prefetch_starve = param<uint64_t>("prefetch_starve_cycles").desc("# of cycles to wait before forcibly serving a prefetch").default_val(0);
       m_r_back_off_cap = param<float>("r_back_off_thresh").desc("Capacity of queue before signalling back off").default_val(0.8f);
       m_w_back_off_cap = param<float>("w_back_off_thresh").desc("Capacity of queue before signalling back off").default_val(0.8f);
 
