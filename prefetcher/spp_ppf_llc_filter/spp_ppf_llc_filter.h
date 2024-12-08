@@ -73,11 +73,6 @@ struct spp_ppf_llc_filter : public champsim::modules::prefetcher {
 	constexpr static unsigned POS_UPDT_THRESHOLD = 90;
 	constexpr static long NEG_UPDT_THRESHOLD = -80;
 
-
-	constexpr static unsigned LLC_FILTER_SETS = 16;
-	constexpr static unsigned LLC_FILTER_WAYS = 4;
-	constexpr static unsigned LLC_FILTER_TIMEOUT = 150;
-
 	enum FILTER_REQUEST {SPP_L2C_PREFETCH, SPP_LLC_PREFETCH, L2C_DEMAND, L2C_EVICT, SPP_PERC_REJECT}; // Request type for prefetch filter
 
 	static uint64_t get_hash(uint64_t key);
