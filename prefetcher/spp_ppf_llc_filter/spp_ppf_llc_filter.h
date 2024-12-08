@@ -69,7 +69,7 @@ struct spp_ppf_llc_filter : public champsim::modules::prefetcher {
 	constexpr static unsigned PERC_FEATURES = 9; //Keep increasing based on new features
 	constexpr static unsigned PERC_COUNTER_MAX = 15; //-16 to +15: 5 bits counter 
 	constexpr static long PERC_THRESHOLD_HI = 75;
-	constexpr static long PERC_THRESHOLD_LO = -55;
+	constexpr static long PERC_THRESHOLD_LO = -15;
 	constexpr static unsigned POS_UPDT_THRESHOLD = 90;
 	constexpr static long NEG_UPDT_THRESHOLD = -80;
 

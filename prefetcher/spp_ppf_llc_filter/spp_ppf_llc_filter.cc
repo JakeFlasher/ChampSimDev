@@ -801,6 +801,11 @@ void spp_ppf_llc_filter::GLOBAL_REGISTER::update_entry(uint32_t pf_sig, uint32_t
         }
     }
 
+    //couldn't find a victim, choose random way
+    if(victim_way >= MAX_GHR_ENTRY) {
+        victim_way = rand() % MAX_GHR_ENTRY;
+    }
+    
     // Assertion
     if (victim_way >= MAX_GHR_ENTRY) {
         std::cout << "[GHR] Cannot find a replacement victim!" << std::endl;
