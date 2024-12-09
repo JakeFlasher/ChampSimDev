@@ -208,18 +208,39 @@ class berti_llc_filter : public champsim::modules::prefetcher {
         uint64_t total_used = 0;
     };
 
-    struct llc_entry {
-      champsim::block_number block;
-      uint64_t first_accessed;
+    struct RAF {
+        constexpr static std::size_t RAF_FILTER_SETS = 4;
+        constexpr static std::size_t RAF_FILTER_WAYS = 16;
+        constexpr static std::size_t RAF_TIMEOUT = 1000;
+        struct raf_entry {
+            champsim::block_number block;
+            uint64_t first_accessed;
 
-      llc_entry() : llc_entry(champsim::block_number{0},0) {}
-      explicit llc_entry(champsim::block_number block_, uint64_t first_accessed_) : block(block_), first_accessed(first_accessed_) {}
-    };
-    struct llc_indexer {
-      auto operator()(const llc_entry& entry) const {return entry.block;}
+            raf_entry() : raf_entry(champsim::block_number{0},0) {}
+            explicit raf_entry(champsim::block_number block_, uint64_t first_accessed_) : block(block_), first_accessed(first_accessed_) {}
+        };
+        struct raf_indexer {
+            auto operator()(const raf_entry& entry) const {return entry.block;}
+        };
+        champsim::msl::lru_table<raf_entry, raf_indexer, raf_indexer> raf_filter{RAF_FILTER_SETS,RAF_FILTER_WAYS};
+        bool check(champsim::address block, uint64_t check_time, bool update_table) {
+            auto raf_filter_entry = raf_filter.check_hit(raf_entry{champsim::block_number{block},0});
+            bool should_drop = false;
+            if(raf_filter_entry.has_value()) {
+                if(check_time - raf_filter_entry->first_accessed < RAF_TIMEOUT)
+                    should_drop = true;
+            }
+            if(update_table)
+                raf_filter.fill(raf_entry{champsim::block_number{block},check_time});
+            return should_drop;
+        }
+        void invalidate(champsim::address block) {
+            raf_filter.invalidate(raf_entry{champsim::block_number{block},0});
+        }
+        
     };
 
-    champsim::msl::lru_table<llc_entry, llc_indexer, llc_indexer> llc_filter{berti_llc_filter_SETS,berti_llc_filter_WAYS};
+    RAF filter_raf;
     
     std::map<uint64_t, berti_llc_filter_table*> berti_llc_filtert;
     std::queue<uint64_t> berti_llc_filtert_queue;

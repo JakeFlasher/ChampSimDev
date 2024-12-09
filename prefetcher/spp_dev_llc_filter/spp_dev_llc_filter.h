@@ -41,10 +41,6 @@ struct spp_dev_llc_filter : public champsim::modules::prefetcher {
   constexpr static uint32_t FILL_THRESHOLD = 90;
   constexpr static uint32_t PF_THRESHOLD = 25;
 
-  constexpr static unsigned LLC_FILTER_SETS = 16;
-  constexpr static unsigned LLC_FILTER_WAYS = 4;
-  constexpr static unsigned LLC_FILTER_TIMEOUT = 150;
-
   // Global register parameters
   constexpr static unsigned GLOBAL_COUNTER_BIT = 10;
   constexpr static uint32_t GLOBAL_COUNTER_MAX = ((1 << GLOBAL_COUNTER_BIT) - 1);
@@ -129,18 +125,39 @@ struct spp_dev_llc_filter : public champsim::modules::prefetcher {
     bool valid[FILTER_SET], // Consider this as "prefetched"
         useful[FILTER_SET]; // Consider this as "used"
       
-    struct llc_entry {
-      champsim::block_number block;
-      uint64_t first_accessed;
+    struct RAF {
+			constexpr static std::size_t RAF_FILTER_SETS = 4;
+			constexpr static std::size_t RAF_FILTER_WAYS = 16;
+			constexpr static std::size_t RAF_TIMEOUT = 1000;
+			struct raf_entry {
+				champsim::block_number block;
+				uint64_t first_accessed;
 
-      llc_entry() : llc_entry(champsim::block_number{0},0) {}
-      explicit llc_entry(champsim::block_number block_, uint64_t first_accessed_) : block(block_), first_accessed(first_accessed_) {}
-    };
-    struct llc_indexer {
-      auto operator()(const llc_entry& entry) const {return entry.block;}
-    };
+				raf_entry() : raf_entry(champsim::block_number{0},0) {}
+				explicit raf_entry(champsim::block_number block_, uint64_t first_accessed_) : block(block_), first_accessed(first_accessed_) {}
+			};
+			struct raf_indexer {
+				auto operator()(const raf_entry& entry) const {return entry.block;}
+			};
+			champsim::msl::lru_table<raf_entry, raf_indexer, raf_indexer> raf_filter{RAF_FILTER_SETS,RAF_FILTER_WAYS};
+			bool check(champsim::address block, uint64_t check_time, bool update_table) {
+				auto raf_filter_entry = raf_filter.check_hit(raf_entry{champsim::block_number{block},0});
+				bool should_drop = false;
+				if(raf_filter_entry.has_value()) {
+					if(check_time - raf_filter_entry->first_accessed < RAF_TIMEOUT)
+						should_drop = true;
+				}
+				if(update_table)
+					raf_filter.fill(raf_entry{champsim::block_number{block},check_time});
+				return should_drop;
+			}
+			void invalidate(champsim::address block) {
+				raf_filter.invalidate(raf_entry{champsim::block_number{block},0});
+			}
+			
+		};
 
-    champsim::msl::lru_table<llc_entry, llc_indexer, llc_indexer> llc_filter{LLC_FILTER_SETS,LLC_FILTER_WAYS};
+		RAF filter_raf;
 
     PREFETCH_FILTER()
     {

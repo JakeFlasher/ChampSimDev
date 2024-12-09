@@ -989,6 +989,7 @@ uint32_t berti_llc_filter::prefetcher_cache_operate(champsim::address addr, cham
   ShadowCache* tscache = scache[me];
   HistoryTable* thistoryt = historyt[me];
 
+  filter_raf.check(addr,intern_->current_cycle(),true);
   champsim::block_number line_addr{addr}; // Line addr
    
   if (line_addr.to<uint64_t>() == 0) return metadata_in;
@@ -1052,13 +1053,9 @@ uint32_t berti_llc_filter::prefetcher_cache_operate(champsim::address addr, cham
     } else no_cross_page++;
 
     //do filter check here
-    auto llc_filter_entry = llc_filter.check_hit(llc_entry{champsim::block_number{p_addr},0});
-    if(llc_filter_entry.has_value()) {
-        if(intern_->current_cycle() - llc_filter_entry->first_accessed > berti_llc_filter_TIMEOUT)
-          llc_filter.invalidate(llc_filter_entry.value());
-        else
-          continue;
-    }
+    bool has_been_prefetched = filter_raf.check(p_addr,intern_->current_cycle(),false);
+    if(has_been_prefetched)
+      continue;
 
     float mshr_load = intern_->get_mshr_occupancy_ratio() * 100;
 
@@ -1072,7 +1069,7 @@ uint32_t berti_llc_filter::prefetcher_cache_operate(champsim::address addr, cham
     if (prefetch_line(p_addr, fill_this_level, metadata_in))
     {
       //update table
-      llc_filter.fill(llc_entry{champsim::block_number{p_addr},intern_->current_cycle()});
+      filter_raf.check(p_addr,intern_->current_cycle(),true);
       ++average_issued;
       if (first_issue)
       {

@@ -83,7 +83,9 @@ uint32_t spp_dev_llc_filter::prefetcher_cache_operate(champsim::address addr, ch
         if (champsim::page_number{pf_addr} == page) { // Prefetch request is in the same physical page
           if (FILTER.check(pf_addr, ((confidence_q[i] >= FILL_THRESHOLD) ? spp_dev_llc_filter::SPP_L2C_PREFETCH : spp_dev_llc_filter::SPP_LLC_PREFETCH))) {
             //fmt::print("address passed filter: {}\n",pf_addr);
-            prefetch_line(pf_addr, (confidence_q[i] >= FILL_THRESHOLD), 0); // Use addr (not base_addr) to obey the same physical page boundary
+            bool success = prefetch_line(pf_addr, (confidence_q[i] >= FILL_THRESHOLD), 0); // Use addr (not base_addr) to obey the same physical page boundary
+            if(success && confidence_q[i] < FILL_THRESHOLD)
+              FILTER.filter_raf.check(pf_addr,intern_->current_cycle(),true);
             //fmt::print("successfully prefetched address {}\n",pf_addr);
             if (confidence_q[i] >= FILL_THRESHOLD) {
               GHR.pf_issued++;
@@ -450,16 +452,9 @@ bool spp_dev_llc_filter::PREFETCH_FILTER::check(champsim::address check_addr, FI
       // If this prefetch request becomes more confident and SPP eventually issues SPP_L2C_PREFETCH,
       // we can get this cache line immediately from the LLC (not from DRAM)
       // To allow this fast prefetch from LLC, SPP does not set the valid bit for SPP_LLC_PREFETCH
-      auto llc_filter_entry = llc_filter.check_hit(llc_entry{champsim::block_number{check_addr},0});
-      if(llc_filter_entry.has_value()) {
-        if(_parent->intern_->current_cycle() - llc_filter_entry->first_accessed > LLC_FILTER_TIMEOUT)
-          llc_filter.invalidate(llc_filter_entry.value());
-        else
+      bool has_been_prefetched = filter_raf.check(check_addr,_parent->intern_->current_cycle(),false);
+      if(has_been_prefetched)
           return false;
-      }
-      else {
-        llc_filter.fill(llc_entry{champsim::block_number{check_addr},_parent->intern_->current_cycle()});
-      }
 
       if constexpr (SPP_DEBUG_PRINT) {
         std::cout << "[FILTER] " << __func__ << " don't set valid for check_addr: " << check_addr << " cache_line: " << cache_line;
@@ -473,6 +468,8 @@ bool spp_dev_llc_filter::PREFETCH_FILTER::check(champsim::address check_addr, FI
       useful[quotient] = 1;
       if (valid[quotient])
         _parent->GHR.pf_useful++; // This cache line was prefetched by SPP and actually used in the program
+      else
+        filter_raf.check(check_addr,_parent->intern_->current_cycle(),true);
 
       if constexpr (SPP_DEBUG_PRINT) {
         std::cout << "[FILTER] " << __func__ << " set useful for check_addr: " << check_addr << " cache_line: " << cache_line;
