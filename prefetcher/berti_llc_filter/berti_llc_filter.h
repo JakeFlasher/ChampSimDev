@@ -211,7 +211,7 @@ class berti_llc_filter : public champsim::modules::prefetcher {
     struct RAF {
         constexpr static std::size_t RAF_FILTER_SETS = 4;
         constexpr static std::size_t RAF_FILTER_WAYS = 16;
-        constexpr static std::size_t RAF_TIMEOUT = 150;
+        constexpr static std::size_t RAF_TIMEOUT = 200;
         struct raf_entry {
             champsim::block_number block;
             uint64_t first_accessed;

@@ -989,7 +989,8 @@ uint32_t berti_llc_filter::prefetcher_cache_operate(champsim::address addr, cham
   ShadowCache* tscache = scache[me];
   HistoryTable* thistoryt = historyt[me];
 
-  filter_raf.check(addr,intern_->current_cycle(),true);
+  //if(cache_hit == 0)
+  //  filter_raf.check(addr,intern_->current_cycle(),true);
   champsim::block_number line_addr{addr}; // Line addr
    
   if (line_addr.to<uint64_t>() == 0) return metadata_in;
