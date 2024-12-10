@@ -30,6 +30,10 @@ uint32_t spp_ppf_llc_filter::prefetcher_cache_operate(champsim::address addr, ch
 										uint32_t metadata_in)
 {
 
+    if(cache_hit == 0) {
+        FILTER.filter_raf.check(addr,intern_->current_cycle(),true);
+    }
+
     champsim::page_number page{addr};
     offset_type page_offset{addr};
     std::vector<uint32_t> confidence_q(100*intern_->get_mshr_size(),0);
@@ -122,7 +126,7 @@ uint32_t spp_ppf_llc_filter::prefetcher_cache_operate(champsim::address addr, ch
                     // Filter checks for redundancy and returns FALSE if redundant
                     // Else it returns TRUE and logs the features for future retrieval 
                     if ( num_pf < ceil(((intern_->get_pq_size().back())/distinct_pages)) ) {					
-                        if (FILTER.check(pf_addr, train_addr, curr_ip, fill_level, train_delta + delta_q[i], last_sig, curr_sig, confidence_q[i], perc_sum, (depth-1))) {
+                        if (FILTER.check(pf_addr, train_addr, curr_ip, fill_level, train_delta + delta_q[i], last_sig, curr_sig, confidence_q[i], perc_sum, (depth-1)) && (!FILTER.filter_raf.check(pf_addr,intern_->current_cycle(),false))) {
 
                             // Histogramming Idea
                             int32_t perc_sum_shifted = perc_sum + (PERC_COUNTER_MAX+1)*PERC_FEATURES; 
@@ -130,7 +134,9 @@ uint32_t spp_ppf_llc_filter::prefetcher_cache_operate(champsim::address addr, ch
                             FILTER.hist_tots[hist_index]++;
                         
                             //[DO NOT TOUCH]:	
-                            prefetch_line(pf_addr, (fill_level == SPP_L2C_PREFETCH),0); // Use addr (not base_addr) to obey the same physical page boundary
+                            bool success = prefetch_line(pf_addr, (fill_level == SPP_L2C_PREFETCH),0); // Use addr (not base_addr) to obey the same physical page boundary
+                            if(success)
+                                FILTER.filter_raf.check(pf_addr,intern_->current_cycle(),true);
                             num_pf++;
 
                             // Only for stats
@@ -571,7 +577,7 @@ bool spp_ppf_llc_filter::PREFETCH_FILTER::check(champsim::address check_addr, ch
     switch (filter_request) {
 		
 		case SPP_PERC_REJECT: // To see what would have been the prediction given perceptron has rejected the PF
-            if ((valid[quotient] || useful[quotient]) && remainder_tag[quotient] == remainder) { 
+            if ((valid[quotient] || useful[quotient] || filter_raf.check(check_addr,parent_->intern_->current_cycle(),true)) && remainder_tag[quotient] == remainder) { 
 				// We want to check if the prefetch would have gone through had perc not rejected
 				// So even in perc reject case, I'm checking in the accept filter for redundancy
                 if(SPP_DEBUG_PRINT) {
@@ -580,10 +586,6 @@ bool spp_ppf_llc_filter::PREFETCH_FILTER::check(champsim::address check_addr, ch
                 }
                 return false; // False return indicates "Do not prefetch"
             } else {
-
-                bool has_been_prefetched = filter_raf.check(check_addr,parent_->intern_->current_cycle(),true);
-                if(has_been_prefetched)
-                    return false;
 
 
 				if (train_neg) {
@@ -626,10 +628,6 @@ bool spp_ppf_llc_filter::PREFETCH_FILTER::check(champsim::address check_addr, ch
                 useful[quotient] = 0; // Reset useful bit
                 remainder_tag[quotient] = remainder;
 
-                bool has_been_prefetched = filter_raf.check(check_addr,parent_->intern_->current_cycle(),true);
-                if(has_been_prefetched)
-                    return false;
-
 
 				// Logging perc features
 				delta[quotient] = cur_delta;
@@ -666,9 +664,6 @@ bool spp_ppf_llc_filter::PREFETCH_FILTER::check(champsim::address check_addr, ch
                 // If this prefetch request becomes more confident and SPP eventually issues SPP_L2C_PREFETCH,
                 // we can get this cache line immediately from the LLC (not from DRAM)
                 // To allow this fast prefetch from LLC, SPP does not set the valid bit for SPP_LLC_PREFETCH
-				bool has_been_prefetched = filter_raf.check(check_addr,parent_->intern_->current_cycle(),true);
-                if(has_been_prefetched)
-                    return false;
 
 				if(SPP_DEBUG_PRINT) {
                     std::cout << "[FILTER] " << __func__ << " don't set valid for check_addr: " << std::hex << check_addr << " cache_line: " << cache_line << std::dec;
@@ -684,10 +679,7 @@ bool spp_ppf_llc_filter::PREFETCH_FILTER::check(champsim::address check_addr, ch
 					parent_->GHR.pf_useful++; // This cache line was prefetched by SPP and actually used in the program
 					// For stats
 					parent_->GHR.pf_l2c_good++;
-				} else {
-                    filter_raf.check(check_addr,parent_->intern_->current_cycle(),true);
                 }
-
                 if(SPP_DEBUG_PRINT) {
                     std::cout << "[FILTER] " << __func__ << " set useful for check_addr: " << std::hex << check_addr << " cache_line: " << cache_line << std::dec;
                     std::cout << " quotient: " << quotient << " valid: " << valid[quotient] << " useful: " << useful[quotient];
@@ -709,7 +701,6 @@ bool spp_ppf_llc_filter::PREFETCH_FILTER::check(champsim::address check_addr, ch
 			//If NOT Prefetched
 			if (!(valid[quotient] && remainder_tag[quotient] == remainder)) {
 				// AND If Rejected by Perc
-                filter_raf.check(check_addr,parent_->intern_->current_cycle(),true);
 
 				if (valid_reject[quotient_reject] && remainder_tag_reject[quotient_reject] == remainder_reject) {
                		 if(SPP_DEBUG_PRINT) {
@@ -750,7 +741,6 @@ bool spp_ppf_llc_filter::PREFETCH_FILTER::check(champsim::address check_addr, ch
             valid[quotient] = 0;
             useful[quotient] = 0;
             remainder_tag[quotient] = 0;
-            filter_raf.invalidate(check_addr);
 			// Reset reject filter too
 			valid_reject[quotient_reject] = 0;
 			remainder_tag_reject[quotient_reject] = 0;
