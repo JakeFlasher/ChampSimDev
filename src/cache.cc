@@ -596,7 +596,16 @@ bool CACHE::prefetch_line(champsim::address pf_addr, bool fill_this_level, uint3
   ++sim_stats.pf_requested;
 
   if (std::size(internal_PQ) >= PQ_SIZE) {
+    //internal_PQ.pop_front();
     return false;
+  }
+
+  //merge prefetch
+  for(auto pq_it : internal_PQ) {
+    if((virtual_prefetch && (pq_it.v_address == pf_addr)) || (!virtual_prefetch && (pq_it.address == pf_addr))) {
+      if(pq_it.skip_fill == !fill_this_level)
+        return true;
+    }
   }
 
   request_type pf_packet;
