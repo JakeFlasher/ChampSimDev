@@ -36,7 +36,7 @@
 
 CACHE::CACHE(CACHE&& other)
     : operable(other),
-
+      internal_PQ(other.PQ_SIZE),
       upper_levels(std::move(other.upper_levels)), lower_level(std::move(other.lower_level)), lower_translate(std::move(other.lower_translate)),
 
       cpu(other.cpu), NAME(std::move(other.NAME)), NUM_SET(other.NUM_SET), NUM_WAY(other.NUM_WAY), MSHR_SIZE(other.MSHR_SIZE), PQ_SIZE(other.PQ_SIZE),
@@ -91,6 +91,8 @@ auto CACHE::operator=(CACHE&& other) -> CACHE&
   pref_module_pimpl->bind(this);
   repl_module_pimpl->bind(this);
 
+  this->internal_PQ = other.internal_PQ;
+
   return *this;
 }
 
@@ -100,6 +102,8 @@ CACHE::tag_lookup_type::tag_lookup_type(const request_type& req, bool local_pref
       type(req.type), prefetch_from_this(local_pref), skip_fill(skip), is_translated(req.is_translated), instr_depend_on_me(req.instr_depend_on_me)
 {
 }
+
+CACHE::tag_lookup_type::tag_lookup_type() : tag_lookup_type(request_type{},false,false) {};
 
 CACHE::mshr_type::mshr_type(const tag_lookup_type& req, champsim::chrono::clock::time_point _time_enqueued)
     : address(req.address), v_address(req.v_address), ip(req.ip), instr_id(req.instr_id), cpu(req.cpu), type(req.type), back_off(req.back_off), row_act(req.row_act),
@@ -501,9 +505,11 @@ long CACHE::operate()
     }
   }
 
+  auto temp_pq = internal_PQ.get();
   auto pq_bandwidth_consumed =
-      champsim::transform_while_n(internal_PQ, std::back_inserter(inflight_tag_check), initiate_tag_bw, can_translate, initiate_tag_check<false>());
+      champsim::transform_while_n(temp_pq, std::back_inserter(inflight_tag_check), initiate_tag_bw, can_translate, initiate_tag_check<false>());
   initiate_tag_bw.consume(pq_bandwidth_consumed);
+  internal_PQ.pop_n(pq_bandwidth_consumed);
 
   // Issue translations
   std::for_each(std::begin(inflight_tag_check), std::end(inflight_tag_check), [this](auto& x) { this->issue_translation(x); });
@@ -595,19 +601,6 @@ bool CACHE::prefetch_line(champsim::address pf_addr, bool fill_this_level, uint3
 {
   ++sim_stats.pf_requested;
 
-  if (std::size(internal_PQ) >= PQ_SIZE) {
-    //internal_PQ.pop_front();
-    return false;
-  }
-
-  //merge prefetch
-  for(auto pq_it : internal_PQ) {
-    if((virtual_prefetch && (pq_it.v_address == pf_addr)) || (!virtual_prefetch && (pq_it.address == pf_addr))) {
-      if(pq_it.skip_fill == !fill_this_level)
-        return true;
-    }
-  }
-
   request_type pf_packet;
   pf_packet.type = access_type::PREFETCH;
   pf_packet.pf_metadata = prefetch_metadata;
@@ -616,10 +609,12 @@ bool CACHE::prefetch_line(champsim::address pf_addr, bool fill_this_level, uint3
   pf_packet.v_address = virtual_prefetch ? pf_addr : champsim::address{};
   pf_packet.is_translated = !virtual_prefetch;
 
-  internal_PQ.emplace_back(pf_packet, true, !fill_this_level);
-  ++sim_stats.pf_issued;
+  bool success = internal_PQ.push({pf_packet, true, !fill_this_level},current_cycle());
 
-  return true;
+  if(success)
+    ++sim_stats.pf_issued;
+
+  return success;
 }
 
 // LCOV_EXCL_START exclude deprecated function
@@ -742,7 +737,7 @@ std::vector<std::size_t> CACHE::get_pq_occupancy() const
 {
   std::vector<std::size_t> retval;
   std::transform(std::begin(upper_levels), std::end(upper_levels), std::back_inserter(retval), [](auto ulptr) { return ulptr->pq_occupancy(); });
-  retval.push_back(std::size(internal_PQ));
+  retval.push_back(internal_PQ.get_size());
   return retval;
 }
 

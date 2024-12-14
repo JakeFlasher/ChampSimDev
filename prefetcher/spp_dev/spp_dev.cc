@@ -30,6 +30,8 @@ void spp_dev::prefetcher_initialize()
   FILTER._parent = this;
   GHR._parent = this;
 
+  intern_->internal_PQ.set_timeout(300);
+
 }
 
 void spp_dev::prefetcher_cycle_operate() {}

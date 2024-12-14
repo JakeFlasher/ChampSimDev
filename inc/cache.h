@@ -33,6 +33,7 @@
 #include <string>
 #include <type_traits>
 #include <vector>
+#include <optional>
 
 #include "address.h"
 #include "bandwidth.h"
@@ -47,6 +48,92 @@
 #include "util/to_underlying.h" // for to_underlying
 #include "waitable.h"
 
+template<typename T>
+class TemporalMergeQueue {
+  private:
+  std::vector<T> queue;
+  std::vector<uint64_t> timestamps;
+  std::size_t max;
+  std::size_t size;
+
+  uint64_t timeout = 150;
+
+  public:
+
+    TemporalMergeQueue& operator=(const TemporalMergeQueue& other) {
+      this->queue = std::move(other.queue);
+      this->max = other.max;
+      this->size = other.size;
+      this->timeout = other.timeout;
+
+      return *this;
+    }
+
+    TemporalMergeQueue(std::size_t max_) : max(max_), queue(max_,T{}), timestamps(max_,0), size(0) {}
+
+    void set_timeout(uint64_t timeout_) {timeout = timeout_;};
+
+    bool is_empty() {
+      return(size == 0);
+    }
+    bool is_full() {
+      return(size == max);
+    }
+
+    std::size_t get_size() const{
+      return max;
+    }
+
+    void pop() {
+      //assert that queue isn't empty
+      assert(size != 0);
+      size--;
+      std::rotate(queue.begin(), queue.begin() + 1,queue.end());
+      std::rotate(timestamps.begin(), timestamps.begin() + 1, timestamps.end());
+    }
+
+    void pop_n(std::size_t n) {
+      assert(size >= n);
+      size -= n;
+      std::rotate(queue.begin(),queue.begin() + n, queue.end());
+      std::rotate(timestamps.begin(), timestamps.begin() + n, timestamps.end());
+    }
+
+    bool push(T entry, uint64_t timestamp) {
+
+      //perform merge, start at back and work forward in time. 
+      //Once we pass the timeout threshold, stop checking
+      //navigate valid part of queue first
+      for(std::size_t pos = 1; pos <= size; pos++) {
+        if(queue.at(size-pos) == entry) {
+          return true;
+        }
+      }
+      //now invalid part of queue (do timeout here)
+      for(std::size_t pos = 1; pos <= max-size; pos++) {
+        if(timestamp - timestamps.at(max-pos) > timeout)
+          break;
+        if(queue.at(max-pos) == entry) {
+          return true;
+        }
+      }
+
+      //couldn't merge? now check to see if full.
+      if(size == max)
+        return false;
+
+      //insert into queue, couldn't merge
+      queue.at(size) = entry;
+      timestamps.at(size) = timestamp;
+      size++;
+      return true;
+    }
+
+    std::vector<T> get() {
+      return std::vector<T>(queue.begin(),queue.begin() + size);
+    }
+
+};
 class CACHE : public champsim::operable
 {
   enum [[deprecated(
@@ -84,6 +171,11 @@ class CACHE : public champsim::operable
 
     explicit tag_lookup_type(request_type req) : tag_lookup_type(req, false, false) {}
     tag_lookup_type(const request_type& req, bool local_pref, bool skip);
+    tag_lookup_type();
+
+    inline bool operator==(const tag_lookup_type& rhs) {
+      return (address == rhs.address && skip_fill == rhs.skip_fill);
+    }
   };
 
 public:
@@ -149,11 +241,12 @@ private:
   auto matches_address(champsim::address address) const;
   std::pair<mshr_type, request_type> mshr_and_forward_packet(const tag_lookup_type& handle_pkt);
 
-  std::deque<tag_lookup_type> internal_PQ{};
+  
   std::deque<tag_lookup_type> inflight_tag_check{};
   std::deque<tag_lookup_type> translation_stash{};
 
 public:
+  TemporalMergeQueue<tag_lookup_type> internal_PQ;
   std::vector<channel_type*> upper_levels;
   channel_type* lower_level;
   channel_type* lower_translate;
@@ -321,7 +414,8 @@ public:
 
   template <typename... Ps, typename... Rs>
   explicit CACHE(champsim::cache_builder<champsim::cache_builder_module_type_holder<Ps...>, champsim::cache_builder_module_type_holder<Rs...>> b)
-      : champsim::operable(b.m_clock_period), upper_levels(b.m_uls), lower_level(b.m_ll), lower_translate(b.m_lt), NAME(b.m_name), NUM_SET(b.get_num_sets()),
+      : champsim::operable(b.m_clock_period), internal_PQ(b.m_pq_size), upper_levels(b.m_uls), lower_level(b.m_ll), lower_translate(b.m_lt), 
+        NAME(b.m_name), NUM_SET(b.get_num_sets()),
         NUM_WAY(b.get_num_ways()), MSHR_SIZE(b.get_num_mshrs()), PQ_SIZE(b.m_pq_size), HIT_LATENCY(b.get_hit_latency() * b.m_clock_period),
         FILL_LATENCY(b.get_fill_latency() * b.m_clock_period), OFFSET_BITS(b.m_offset_bits), MAX_TAG(b.get_tag_bandwidth()), MAX_FILL(b.get_fill_bandwidth()),
         prefetch_as_load(b.m_pref_load), match_offset_bits(b.m_wq_full_addr), virtual_prefetch(b.m_va_pref), pref_activate_mask(b.m_pref_act_mask),
