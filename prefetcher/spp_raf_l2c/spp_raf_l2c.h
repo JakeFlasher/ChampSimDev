@@ -61,10 +61,11 @@ class spp_raf_l2c : public champsim::modules::prefetcher {
   constexpr static unsigned NRAM_WAYS = 128;
   constexpr static unsigned NRAM_VECTOR = DRAM_GROUPS;
 
-  constexpr static unsigned RAD_DELAY = 50;
-  constexpr static unsigned RAD_ISSUE_THRESH = 4;
+  constexpr static unsigned RAD_DELAY_HIT = 30;
+  constexpr static unsigned RAD_DELAY_MISS = 150;
+  constexpr static unsigned RAD_ISSUE_THRESH = 8;
   constexpr static unsigned RAD_SETS = DRAM_GROUPS;
-  constexpr static unsigned RAD_WAYS = 4;
+  constexpr static unsigned RAD_WAYS = 1;
   constexpr static unsigned RAD_VECTOR = DRAM_BLOCK_COLUMNS;
 
   //bloom filter stuff
@@ -77,7 +78,7 @@ class spp_raf_l2c : public champsim::modules::prefetcher {
   constexpr static unsigned RFM_THRESH = 16;
 
   //probabilistic approach
-  constexpr static float BLOOM_SET_PROB = 0.01;
+  constexpr static float BLOOM_SET_PROB = 0.1;
   constexpr static float BLOOM_RESET_PROB = 0.01;
 
   constexpr static unsigned BLOOM_RESET_INTERVAL_MS = 32;
@@ -124,19 +125,19 @@ class spp_raf_l2c : public champsim::modules::prefetcher {
   template<std::size_t cap>
   class PREFETCH_QUEUE
   {
-    std::deque<std::pair<bool,champsim::address>> to_prefetch;
+    std::deque<std::tuple<bool,champsim::address,uint64_t>> to_prefetch;
     public:
-    void push(champsim::address a, bool prefetch_this_level) {
+    void push(champsim::address a, bool prefetch_this_level, uint64_t time) {
       if(std::size(to_prefetch) >= cap)
         return;
-      to_prefetch.push_back({prefetch_this_level,a});
+      to_prefetch.push_back({prefetch_this_level,a,time});
       //return true;
     }
 
     bool is_empty() {
       return to_prefetch.empty();
     }
-    std::pair<bool,champsim::address> front() {
+    std::tuple<bool,champsim::address,uint64_t> front() {
       return to_prefetch.front();
     }
     void pop() {
@@ -377,7 +378,7 @@ class spp_raf_l2c : public champsim::modules::prefetcher {
       std::vector<uint32_t>          metadata;
 
       rad_table_entry() : rad_table_entry(0,0,0) {}
-      explicit rad_table_entry(uint64_t row_id_, uint64_t bank_id_, uint64_t first_used_) : row_id(row_id_), bank_id(bank_id_), first_used(first_used_), blocks(RAD_VECTOR), fill_this_level(RAD_VECTOR), metadata(RAD_VECTOR) {}
+      explicit rad_table_entry(uint64_t row_id_, uint64_t bank_id_, uint64_t first_used_) : row_id(row_id_), bank_id(bank_id_), first_used(first_used_), blocks(RAD_VECTOR), fill_this_level(RAD_VECTOR,true), metadata(RAD_VECTOR) {}
     };
     struct rad_set_indexer {
       auto operator()(const rad_table_entry& entry) const { return entry.bank_id; }
@@ -386,11 +387,26 @@ class spp_raf_l2c : public champsim::modules::prefetcher {
       auto operator()(const rad_table_entry& entry) const { return entry.row_id; }
     };
 
+    struct ptb_entry {
+      champsim::block_number block;
+      uint64_t first_entered;
+
+      ptb_entry() : ptb_entry(champsim::block_number{0},0) {}
+      explicit ptb_entry(champsim::block_number block_, uint64_t first_entered_) : block(block_), first_entered(first_entered_) {}
+    };
+
+    struct ptb_indexer {
+      auto operator()(const ptb_entry& entry) const {return entry.block;};
+    };
+
     champsim::msl::lru_table<ram_table_entry,ram_indexer,ram_indexer> ram_table{RAM_SETS,RAM_WAYS};
 
     champsim::msl::lru_table<ram_table_entry,ram_indexer,ram_indexer> nram_table{NRAM_SETS,NRAM_WAYS};
 
     champsim::msl::lru_table<rat_table_entry,rat_set_indexer,rat_way_indexer> rat_table{RAT_SETS,RAT_WAYS};
+
+    champsim::msl::lru_table<ptb_entry,ptb_indexer,ptb_indexer> ptb_table{1,32};
+
     TABLE_BLOOM_FILTER rat_bloom_filter;
     ACT_COUNTER rat_act_counter;
     SATURATING_ACT_COUNTER rat_sact_counter;
@@ -423,7 +439,7 @@ class spp_raf_l2c : public champsim::modules::prefetcher {
     bool check_nram_table(champsim::address pf_addr);
 
     void set_rat_table(champsim::address addr, bool is_prefetch);
-    //bool check_rat_table(champsim::address pf_addr);
+    bool check_rat_table(champsim::address pf_addr);
     bool filter_prefetch_rat(champsim::address addr);
     void reset_filter(champsim::address addr);
 
@@ -436,6 +452,10 @@ class spp_raf_l2c : public champsim::modules::prefetcher {
 
     void cache_operate_rad_table(champsim::address pf_addr, bool fill_this_level, uint32_t metadata);
     void cycle_operate_rad_table();
+
+    void inval_ptb_table(champsim::address pf_addr);
+    void update_ptb_table(champsim::address pf_addr);
+    bool check_ptb_table(champsim::address pf_addr);
 
     uint64_t get_column_block(champsim::address pf_addr);
 

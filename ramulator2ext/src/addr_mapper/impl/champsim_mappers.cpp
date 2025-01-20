@@ -245,28 +245,28 @@ class ZEN4 final : public IAddrMapper, public Implementation {
       Addr_t reference_addr = req.addr;
       Addr_t addr = req.addr >> m_tx_offset;
 
-      //channel
+      //channel (6)
       long int channel_bits = slice_lower_bits(addr, m_addr_bits[m_dram->m_levels("channel")]);
 
-      //column bit 0
+      //column bit 0 (7)
       long int column_bits = slice_lower_bits(addr, 1);
       
-      //bankgroup bits 0 and 1
+      //bankgroup bits 0 and 1 (8-9)
       long int bg_bits = slice_lower_bits(addr,2);
 
-      //bank bits
+      //bank bits (10-11)
       long int bank_bits = slice_lower_bits(addr,m_addr_bits[m_dram->m_levels("bank")]);
 
-      //remaining bankgroup bits
+      //remaining bankgroup bits (12)
       bg_bits |= slice_lower_bits(addr,m_addr_bits[m_dram->m_levels("bankgroup")] - 2) << 2;
 
-      //remaining column bits
+      //remaining column bits (13-17)
       column_bits |= slice_lower_bits(addr,m_addr_bits[m_dram->m_levels("column")] - 1) << 1;
 
-      //rank bits
+      //rank bits (18)
       long int rank_bits = slice_lower_bits(addr, m_addr_bits[m_dram->m_levels("rank")]);
 
-      //row bits
+      //row bits  (19-34)
       long int row_bits = slice_lower_bits(addr, m_addr_bits[m_dram->m_levels("row")]);
 
       //XOR time
@@ -375,22 +375,22 @@ class ZEN4 final : public IAddrMapper, public Implementation {
       Addr_t reference_addr = req.addr;
       Addr_t addr = req.addr >> m_tx_offset;
 
-      //channel
+      //channel (6)
       long int channel_bits = slice_lower_bits(addr, m_addr_bits[m_dram->m_levels("channel")]);
 
-      //column bit 0
+      //column bit 0 (7)
       long int column_bits = slice_lower_bits(addr, 1);
       
-      //bankgroup bits
+      //bankgroup bits (8-9)
       long int bg_bits = slice_lower_bits(addr,m_addr_bits[m_dram->m_levels("bankgroup")]);
 
-      //bank bits
+      //bank bits (10-11)
       long int bank_bits = slice_lower_bits(addr,m_addr_bits[m_dram->m_levels("bank")]);
 
-      //remaining column bits
+      //remaining column bits (12-16)
       column_bits |= slice_lower_bits(addr,m_addr_bits[m_dram->m_levels("column")] - 1) << 1;
 
-      //row bits
+      //row bits (17-32)
       long int row_bits = slice_lower_bits(addr, m_addr_bits[m_dram->m_levels("row")]);
 
       //XOR time

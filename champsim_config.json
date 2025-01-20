@@ -27,7 +27,7 @@
             "dispatch_latency": 2,
             "schedule_latency": 1,
             "execute_latency": 3,
-            "branch_predictor": "hp_new",
+            "branch_predictor": "hashed_perceptron",
             "btb": "basic_btb"
         }
     ],
@@ -86,7 +86,7 @@
         "prefetch_as_load": false,
         "virtual_prefetch": false,
         "prefetch_activate": "LOAD,PREFETCH",
-        "prefetcher": "no"
+        "prefetcher": "tcp_stride"
 	},
 
     "ITLB": {

@@ -924,6 +924,7 @@ void berti::prefetcher_initialize()
   others++;
 
   std::cout << "Berti Prefetcher" << std::endl;
+  intern_->internal_PQ.set_timeout(1500);
 
 # ifdef NO_CROSS_PAGE
   std::cout << "No Crossing Page" << std::endl;

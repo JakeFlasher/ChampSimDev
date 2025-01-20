@@ -119,6 +119,8 @@ void bouquet_l1d::prefetcher_initialize()
     num_misses.push_back(0);
     mpkc.push_back(0);
     spec_nl.push_back(0);
+
+    intern_->internal_PQ.set_timeout(1500);
 }
 
 uint32_t bouquet_l1d::prefetcher_cache_operate(champsim::address addr, champsim::address ip, uint8_t cache_hit, bool useful_prefetch, access_type type,

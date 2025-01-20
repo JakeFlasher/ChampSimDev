@@ -269,6 +269,12 @@ bool CACHE::handle_fill(const mshr_type& fill_mshr)
   return true;
 }
 
+bool CACHE::check_hit(champsim::address address) {
+  auto [set_begin, set_end] = get_set_span(address);
+  auto way = std::find_if(set_begin, set_end, [matcher = matches_address(address)](const auto& x) { return x.valid && matcher(x); });
+  return (way != set_end);
+}
+
 bool CACHE::try_hit(const tag_lookup_type& handle_pkt)
 {
   cpu = handle_pkt.cpu;
