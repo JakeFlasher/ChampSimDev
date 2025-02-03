@@ -24,16 +24,29 @@ struct spp_dev_llc_frag : public champsim::modules::prefetcher {
   uint64_t next_line_prefetches_issued = 0;
   uint64_t next_line_prefetches_dropped = 0;
 
-  std::size_t aggression_factor = 4;
-  std::size_t max_aggression = 8;
+  uint64_t prefetch_num = 0;
+
+  double aggression_factor = 4;
+  double max_aggression = 8;
 
   uint64_t last_useful = 0;
+  uint64_t last_last_useful = 0;
 
   uint64_t last_evictions = 0;
   uint64_t last_last_evictions = 0;
 
-  uint64_t update_period = 1e5;
+  uint64_t last_hit = 0;
+  uint64_t last_miss = 0;
+
+  uint64_t update_period = 1e4;
   uint64_t current_cycle = 0;
+
+  double increase_factor = 0.05;
+  double decrease_factor = 0.5;
+
+  int direction = 1;
+
+  std::vector<std::vector<champsim::address>> bank_util;
 
 
   //row state table
@@ -54,7 +67,13 @@ struct spp_dev_llc_frag : public champsim::modules::prefetcher {
   void update_row_state_table(champsim::address addr);
   bool is_row_open(champsim::address addr);
 
-  void prefetch_column(champsim::address addr, bool hit);
+  void prefetch_column(champsim::address addr);
+  void prefetch_next_line(champsim::address addr);
+
+  void add_to_bank_queue(champsim::address addr);
+  void remove_from_bank_queue(champsim::address addr);
+
+  std::size_t get_bank_queue_size(champsim::address addr);
 
   //DRAM DECODE
   unsigned int get_dram_group(champsim::address pf_addr);
@@ -69,7 +88,9 @@ struct spp_dev_llc_frag : public champsim::modules::prefetcher {
                                     uint32_t metadata_in);
   uint32_t prefetcher_cache_fill(champsim::address addr, long set, long way, uint8_t prefetch, champsim::address evicted_addr, uint32_t metadata_in);
 
-  // void prefetcher_initialize();
+  void prefetcher_initialize() {
+    bank_util = std::vector<std::vector<champsim::address>>(DRAM_GROUPS);
+  }
   // void prefetcher_branch_operate(champsim::address ip, uint8_t branch_type, champsim::address branch_target) {}
   void prefetcher_cycle_operate();
   void prefetcher_final_stats();

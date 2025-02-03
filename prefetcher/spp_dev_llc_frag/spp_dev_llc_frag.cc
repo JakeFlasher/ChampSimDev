@@ -9,54 +9,44 @@ uint32_t spp_dev_llc_frag::prefetcher_cache_operate(champsim::address addr, cham
   if(cache_hit == 0) {
     //update row state table
     update_row_state_table(addr);
+    last_miss++;
+
+    add_to_bank_queue(addr);
   }
+  else
+    last_hit++;
   if(useful_prefetch) {
       last_useful++;
     }
-
-  prefetch_column(addr,false);//!((cache_hit == 0 || is_row_open(addr)) && type == access_type::PREFETCH));
-
-  //do next-line
-  /*
-  champsim::block_number pf_addr{addr};
-  for(std::size_t offset = 1; offset <= 4; offset++) {
-    //get pf address
-    champsim::address pf_addr{champsim::block_number{addr} + offset};
-
-    //get if row for prefetch is open
-    bool row_is_open = is_row_open(pf_addr);
-
-    //if our offset is below threshold, prefetch always. Otherwise, only if row is open
-    if((offset <= 4 || row_is_open)) {
-
-      //issue next line prefetch
-      bool success = prefetch_line(pf_addr,true,metadata_in);
-
-      if(success) {
-        prefetch_column(pf_addr,0);
-        next_line_prefetches_issued++;
-      }
-
-      //if it was a success, prefetch the next columns as well
-      //if(success) {
-      //  next_line_prefetches_issued++;
-      //  if(row_is_open)
-      //    prefetch_column(pf_addr);
-      //  else
-      //    column_prefetches_dropped+=4;
-      //}
-      //else
-      //  full_queue++;
-    
-    }
-  }*/
+  
+  std::size_t aggression = std::round(aggression_factor);
+  prefetch_next_line(addr);
+  prefetch_column(addr);//!((cache_hit == 0 || is_row_open(addr)) && type == access_type::PREFETCH));
 
   return metadata_in;
+}
+
+
+void spp_dev_llc_frag::add_to_bank_queue(champsim::address addr) {
+  auto loc = std::find(bank_util[get_dram_group(addr)].begin(), bank_util[get_dram_group(addr)].end(), addr);
+  if(loc == bank_util[get_dram_group(addr)].end())
+    bank_util[get_dram_group(addr)].push_back(addr);
+}
+void spp_dev_llc_frag::remove_from_bank_queue(champsim::address addr) {
+  auto loc = std::find(bank_util[get_dram_group(addr)].begin(), bank_util[get_dram_group(addr)].end(), addr);
+  if(loc != bank_util[get_dram_group(addr)].end())
+    bank_util[get_dram_group(addr)].erase(loc);
+}
+std::size_t spp_dev_llc_frag::get_bank_queue_size(champsim::address addr) {
+  return bank_util[get_dram_group(addr)].size();
 }
 uint32_t spp_dev_llc_frag::prefetcher_cache_fill(champsim::address addr, long set, long way, uint8_t prefetch, champsim::address evicted_addr, uint32_t metadata_in)
 {
 
   //look at fills, grab next columns from fills
+  
+  remove_from_bank_queue(addr);
+
   if(prefetch != 0 && evicted_addr != champsim::address{} && metadata_in != 0)
     last_evictions++;
   return metadata_in;
@@ -70,34 +60,68 @@ void spp_dev_llc_frag::update_row_state_table(champsim::address addr) {
   row_table.fill(row_state_table_entry{get_dram_group(addr),get_dram_row(addr)});
 }
 
-void spp_dev_llc_frag::prefetch_column(champsim::address pf_addr, bool hit) {
+void spp_dev_llc_frag::prefetch_column(champsim::address pf_addr) {
   uint64_t target_column = get_dram_column(pf_addr);
-  int radius = aggression_factor;
-  for(int offset = 0; offset <= radius; offset++) {
+  std::size_t num = std::ceil(aggression_factor);
+
+  for(int offset = 0; offset <= num; offset++) {
     if(offset == 0)
       continue;
-    
-    if(hit) {
-      column_prefetches_dropped++;
-      continue;
-    }
 
     champsim::address new_address = compose_base_and_column(pf_addr,target_column + offset);
     //fmt::print("Address: {} Expected Row: {} Actual Row: {} Expected Column: {} Actual Column: {}\n",new_address,get_dram_row(pf_addr),get_dram_row(new_address),target_column + offset,get_dram_column(new_address));
     if(offset < 0 && target_column >= std::abs(offset)) {
-      if(prefetch_line(compose_base_and_column(pf_addr,target_column + offset),true,1))
-        column_prefetches_issued++;
-      else
-        full_queue++;
+      if(get_bank_queue_size(pf_addr) < 1) {
+        if(prefetch_line(compose_base_and_column(pf_addr,target_column + offset),true,1)) {
+          column_prefetches_issued++;
+          prefetch_num++;
+        }
+        else
+          full_queue++;
+      }
+      else {
+        column_prefetches_dropped++;
+      }
     }
     else if(target_column + offset < BLOCKS_PER_RB - 1){
-      if(prefetch_line(compose_base_and_column(pf_addr,target_column + offset),true,1))
-        column_prefetches_issued++;
-      else
-        full_queue++;
+      if(get_bank_queue_size(pf_addr) < 1) {
+        if(prefetch_line(compose_base_and_column(pf_addr,target_column + offset),true,1)) {
+          column_prefetches_issued++;
+          prefetch_num++;
+        }
+        else
+          full_queue++;
+      }
+      else {
+        column_prefetches_dropped++;
+      }
     }
   }
   
+}
+
+void spp_dev_llc_frag::prefetch_next_line(champsim::address pf_addr) {
+
+  std::size_t num = 4;
+  std::size_t grp = get_dram_group(pf_addr);
+  
+  for(std::size_t offset = 1; offset <= num; offset++) {
+
+    champsim::address new_address = champsim::address{champsim::block_number{pf_addr} + offset};
+    if(get_bank_queue_size(pf_addr) < 1) {
+      if(prefetch_line(new_address,true,1)) {
+        next_line_prefetches_issued++;
+        prefetch_num++;
+        //prefetch_column(new_address);
+      }
+      else {
+        full_queue++;
+      }
+    }
+    else {
+      next_line_prefetches_dropped++;
+    }
+  }
 }
 
 //DRAM ADDRESS DECODING
@@ -154,26 +178,47 @@ void spp_dev_llc_frag::prefetcher_final_stats() {
   fmt::print("\tNEXT-COLUMN PREFETCHES ISSUED: {}\tDROPPED: {}\n",column_prefetches_issued,column_prefetches_dropped);
   fmt::print("\tNEXT-LINE PREFETCHES ISSUED: {}\tDROPPED: {}\n",next_line_prefetches_issued,next_line_prefetches_dropped);
   fmt::print("\tFULL QUEUE: {}\n",full_queue);
+
+  fmt::print("Bank util:\n");
+  std::size_t b_num = 0;
+  for(auto it : bank_util) {
+    fmt::print("\t{} : {}\n",b_num,it.size());
+    b_num++;
+  }
 }
 
 void spp_dev_llc_frag::prefetcher_cycle_operate() {
 
+  /*
+  double normal_hit_rate = last_hit / (double)(last_miss + last_hit);
+  double prefetch_hit_rate = (last_useful + 0.5*last_last_useful) / (double)(last_last_evictions + (last_evictions*0.5));
+
   current_cycle++;
   if(current_cycle % update_period == 0) {
-    if((last_last_evictions*0.8) > last_useful) {
-      if(aggression_factor > 0)
-        aggression_factor--;
+    if(last_useful <= last_last_useful) {
+        direction = direction * -1;
     }
-    else {
-      if(aggression_factor < max_aggression)
-        aggression_factor++;
+    if((prefetch_hit_rate >= (normal_hit_rate*0.8)) || direction < 0) {
+      if(aggression_factor + (direction*increase_factor) < 0) {
+        aggression_factor = 0;
+      }
+      else if(aggression_factor + (direction*increase_factor) > max_aggression) {
+        aggression_factor = max_aggression;
+      }
+      else {
+        aggression_factor += (direction)*increase_factor;
+      }
     }
-    fmt::print("aggression factor: {} evicted: {} useful: {}\n",aggression_factor, last_evictions, last_useful);
+
+    //fmt::print("aggression factor: {} evicted: {} last_evicted: {} useful: {} hit rate: {} prefetch hit rate: {}\n",aggression_factor, last_evictions, last_last_evictions, last_useful, normal_hit_rate, prefetch_hit_rate);
     last_last_evictions = last_evictions;
     last_evictions = 0;
+    last_last_useful = last_useful;
     last_useful = 0;
+    last_hit = 0;
+    last_miss = 0;
     
     
   }
-  
+  */
 }
