@@ -44,6 +44,7 @@ void to_json(nlohmann::json& j, const CACHE::stats_type& stats)
   using hits_value_type = typename decltype(stats.hits)::value_type;
   using misses_value_type = typename decltype(stats.misses)::value_type;
   using downstream_value_type = typename decltype(stats.downstream_packets)::value_type;
+  using returned_value_type = typename decltype(stats.returned_packets)::value_type;
 
   std::map<std::string, nlohmann::json> statsmap;
   statsmap.emplace("prefetch requested", stats.pf_requested);
@@ -51,18 +52,20 @@ void to_json(nlohmann::json& j, const CACHE::stats_type& stats)
   statsmap.emplace("useful prefetch", stats.pf_useful);
   statsmap.emplace("useless prefetch", stats.pf_useless);
   statsmap.emplace("miss latency", std::ceil(stats.total_miss_latency_cycles) / std::ceil(stats.misses.total()));
-  for (const auto type : {access_type::LOAD, access_type::RFO, access_type::PREFETCH, access_type::WRITE, access_type::TRANSLATION}) {
+  for (const auto type : {access_type::LOAD, access_type::RFO, access_type::PREFETCH, access_type::WRITE, access_type::TRANSLATION, access_type::PROMOTION, access_type::DROPPED}) {
     std::vector<hits_value_type> hits;
     std::vector<misses_value_type> misses;
     std::vector<downstream_value_type> downstreams;
+    std::vector<returned_value_type> returned;
 
     for (std::size_t cpu = 0; cpu < NUM_CPUS; ++cpu) {
       hits.push_back(stats.hits.value_or(std::pair{type, cpu}, hits_value_type{}));
       misses.push_back(stats.misses.value_or(std::pair{type, cpu}, misses_value_type{}));
-      downstreams.push_back(stats.downstream_packets.value_or(std::pair{type, cpu}, misses_value_type{}));
+      downstreams.push_back(stats.downstream_packets.value_or(std::pair{type, cpu}, downstream_value_type{}));
+      returned.push_back(stats.downstream_packets.value_or(std::pair{type, cpu}, returned_value_type{}));
     }
 
-    statsmap.emplace(access_type_names.at(champsim::to_underlying(type)), nlohmann::json{{"hit", hits}, {"miss", misses}, {"downstream", downstreams}});
+    statsmap.emplace(access_type_names.at(champsim::to_underlying(type)), nlohmann::json{{"hit", hits}, {"miss", misses}, {"downstream", downstreams}, {"returned", returned}});
   }
 
   j = statsmap;
@@ -74,6 +77,8 @@ void to_json(nlohmann::json& j, const DRAM_CHANNEL::stats_type stats)
                      {"RQ ROW_BUFFER_MISS", stats.RQ_ROW_BUFFER_MISS},
                      {"WQ ROW_BUFFER_HIT", stats.WQ_ROW_BUFFER_HIT},
                      {"WQ ROW_BUFFER_MISS", stats.WQ_ROW_BUFFER_MISS},
+                     {"PF DROPPED", stats.PF_DROPPED},
+                     {"PF PROMOTED", stats.PF_PROMOTED},
                      {"AVG DBUS CONGESTED CYCLE", (std::ceil(stats.dbus_cycle_congested) / std::ceil(stats.dbus_count_congested))},
                      {"REFRESHES ISSUED", stats.refresh_cycles}};
 }

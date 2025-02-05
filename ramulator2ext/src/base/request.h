@@ -26,6 +26,9 @@ struct Request {
   int source_id = -1;  // An identifier for where the request is coming from (e.g., which core)
 
   bool is_prefetch = false;
+  bool is_promotion = false;
+  bool was_promoted = false;
+  bool was_dropped = false;
 
   bool back_off = false;
   bool row_act = false;
@@ -46,7 +49,7 @@ struct Request {
   Request(Addr_t addr, int type);
   Request(AddrVec_t addr_vec, int type);
   Request(Addr_t addr, int type, int source_id, std::function<void(Request&)> callback);
-  Request(Addr_t addr, int type, int source_id, bool prefetch, std::function<void(Request&)> callback);
+  Request(Addr_t addr, int type, int source_id, bool prefetch, bool promotion, std::function<void(Request&)> callback);
 };
 
 

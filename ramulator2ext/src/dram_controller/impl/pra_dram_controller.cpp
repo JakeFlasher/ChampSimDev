@@ -107,10 +107,41 @@ class PRADRAMController final : public IBHDRAMController, public Implementation 
         };
         if (std::find_if(m_write_buffer.begin(), m_write_buffer.end(), compare_addr) != m_write_buffer.end()) {
           // The request will depart at the next cycle
+          //fmt::print("[DRAM] Forwarding write for {0:x}\n",req.addr);
           req.depart = m_clk + 1;
           pending.push_back(req);
           return true;
         }
+      }
+      //fmt::print("Processing packet {0:x} promotion: {} prefetch: {}\n",req.addr, req.is_promotion, req.is_prefetch);
+      //Drop prefetches that are promoted via read
+      if ((req.type_id == Request::Type::Read) && req.is_promotion) {
+        //fmt::print("Received promotion for {0:x}, looking for candidate...\n",req.addr);
+        auto compare_prefetch = [req](const Request& rreq) {
+          return ((rreq.addr >> 6) == (req.addr >> 6)) && rreq.is_prefetch;
+        };
+        auto in_rq = std::find_if(m_read_buffer.begin(), m_read_buffer.end(), compare_prefetch);
+        if(in_rq != m_read_buffer.end()) {
+          //fmt::print("Promotion of packet {0:x} to DEMAND READ\n",in_rq->addr);
+          in_rq->is_prefetch = false;
+          in_rq->was_promoted = true;
+          return true;
+        }
+        //fmt::print("\tCouldn't find one\n");
+      }
+
+      //Drop prefetches that have reads already in the queue
+      if ((req.type_id == Request::Type::Read) && req.is_prefetch) {
+        //fmt::print("Received prefetch for {0:x}, looking for promotions...\n",req.addr);
+        auto compare_prefetch = [req](const Request& rreq) {
+          return ((rreq.addr >> 6) == (req.addr >> 6)) && rreq.is_promotion;
+        };
+        auto in_rq = std::find_if(m_read_buffer.begin(), m_read_buffer.end(), compare_prefetch);
+        if(in_rq != m_read_buffer.end()) {
+          //fmt::print("Promotion of packet {0:x} to DEMAND READ\n",in_rq->addr);
+          return true;
+        }
+        //fmt::print("\tCouldn't find one\n");
       }
 
       // Else, enqueue them to corresponding buffer based on request type id
@@ -203,11 +234,6 @@ class PRADRAMController final : public IBHDRAMController, public Implementation 
           }
 
           if (req.callback) {
-            // If the request comes from outside (e.g., processor), call its callback
-            if((m_read_buffer.size() > (m_read_buffer.max_size * m_r_back_off_cap)) ||  (m_write_buffer.size() > (m_write_buffer.max_size * m_w_back_off_cap))) {
-              req.back_off = true;
-              //fmt::print("r: {} w: {}\n",m_read_buffer.size(), m_write_buffer.size());
-            }
             req.callback(req);
           }
           // Finally, remove this request from the pending queue

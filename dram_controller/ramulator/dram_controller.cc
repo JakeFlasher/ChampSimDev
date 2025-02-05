@@ -127,7 +127,7 @@ void DRAM_CHANNEL::end_phase(unsigned /*cpu*/) { roi_stats = sim_stats; }
 
 
 DRAM_CHANNEL::request_type::request_type(const typename champsim::channel::request_type& req)
-    : pf_metadata(req.pf_metadata), address(req.address), v_address(req.address), data(req.data), instr_depend_on_me(req.instr_depend_on_me)
+    : pf_metadata(req.pf_metadata), address(req.address), v_address(req.address), type(req.type), data(req.data), instr_depend_on_me(req.instr_depend_on_me)
 {
   asid[0] = req.asid[0];
   asid[1] = req.asid[1];
@@ -215,12 +215,19 @@ void MEMORY_CONTROLLER::initiate_requests()
 
 void MEMORY_CONTROLLER::return_packet_rq_rr(Ramulator::Request& req, DRAM_CHANNEL::request_type pkt)
 {
-  response_type response{pkt.address, pkt.v_address, pkt.data,
+  response_type response{req.back_off, req.row_act, pkt.type, pkt.address, pkt.v_address, pkt.data,
                         pkt.pf_metadata, pkt.instr_depend_on_me};
 
-  response.back_off = req.back_off;
-  response.row_act = req.row_act;
-
+  if(req.was_dropped) {
+    response.type = access_type::DROPPED;
+    //fmt::print("[DRAM] Dropped PREFETCH packet {0:x}\n",req.addr);
+    channels[dram_get_channel(pkt.address)].sim_stats.PF_DROPPED += 1;
+    assert(pkt.type == access_type::PREFETCH);
+  }
+  if(req.was_promoted) {
+    channels[dram_get_channel(pkt.address)].sim_stats.PF_PROMOTED += 1;
+    assert(pkt.type == access_type::PREFETCH);
+  }
   for (auto* ret : pkt.to_return) {
     ret->push_back(response);
   }
@@ -240,6 +247,7 @@ bool MEMORY_CONTROLLER::add_rq(const request_type& packet, champsim::channel* ul
       {
         DRAM_CHANNEL::request_type pkt = DRAM_CHANNEL::request_type{packet};
         pkt.to_return = {&ul->returned};
+        //fmt::print("[DRAM] Adding access type: {} for {} to queue\n", champsim::to_underlying(packet.type), packet.address);
         success = ramulator2_frontend->receive_external_requests((int)packet.type, packet.address.to<int64_t>(), packet.cpu, [=](Ramulator::Request& req) {return_packet_rq_rr(req,pkt);});
       }
       else
@@ -254,7 +262,7 @@ bool MEMORY_CONTROLLER::add_rq(const request_type& packet, champsim::channel* ul
       //if warmup, just return true and send necessary responses
       if(packet.response_requested)
       {
-          response_type response{packet.address, packet.v_address, packet.data,
+          response_type response{false, false, packet.type, packet.address, packet.v_address, packet.data,
                                 packet.pf_metadata, packet.instr_depend_on_me};
           for (auto* ret : {&ul->returned}) {
             ret->push_back(response);

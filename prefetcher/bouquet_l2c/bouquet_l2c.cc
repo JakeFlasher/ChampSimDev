@@ -32,7 +32,7 @@ void bouquet_l2c::prefetcher_initialize()
     trackers.push_back(std::vector<IP_TRACKER>(NUM_IP_TABLE_L2_ENTRIES));
     instance_id = instances;
     instances++;
-    intern_->internal_PQ.set_timeout(1500);
+    //intern_->internal_PQ.set_timeout(1500);
 }
 
 uint32_t bouquet_l2c::prefetcher_cache_operate(champsim::address addr, champsim::address ip, uint8_t cache_hit, bool useful_prefetch, access_type type,

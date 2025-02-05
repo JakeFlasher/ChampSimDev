@@ -121,7 +121,13 @@ CACHE::mshr_type CACHE::mshr_type::merge(mshr_type predecessor, mshr_type succes
   std::set_union(std::begin(predecessor.to_return), std::end(predecessor.to_return), std::begin(successor.to_return), std::end(successor.to_return),
                  std::back_inserter(merged_return));
 
-  mshr_type retval{(successor.type == access_type::PREFETCH) ? predecessor : successor};
+  mshr_type retval{successor.type == access_type::PREFETCH ? predecessor : successor};
+  if(successor.type == access_type::PREFETCH) {
+    retval.type = predecessor.type;
+  }
+  else {
+    retval.type = successor.type;
+  }
 
   retval.time_enqueued = ((successor.type != access_type::PREFETCH && predecessor.type == access_type::PREFETCH)) ? successor.time_enqueued : predecessor.time_enqueued;
   retval.instr_depend_on_me = merged_instr;
@@ -175,48 +181,49 @@ bool CACHE::handle_fill(const mshr_type& fill_mshr)
 {
   cpu = fill_mshr.cpu;
 
-  // find victim
-  auto [set_begin, set_end] = get_set_span(fill_mshr.address);
-  auto way = std::find_if_not(set_begin, set_end, [](auto x) { return x.valid; });
-  if (way == set_end) {
-    way = std::next(set_begin, impl_find_victim(fill_mshr.cpu, fill_mshr.instr_id, get_set_index(fill_mshr.address), &*set_begin, fill_mshr.ip,
-                                                fill_mshr.address, fill_mshr.type));
-  }
-  assert(set_begin <= way);
-  assert(way <= set_end);
-  assert(way != set_end || fill_mshr.type != access_type::WRITE); // Writes may not bypass
-  const auto way_idx = std::distance(set_begin, way);             // cast protected by earlier assertion
-
-  if constexpr (champsim::debug_print) {
-    fmt::print("[{}] {} instr_id: {} address: {} v_address: {} set: {} way: {} type: {} prefetch_metadata: {} cycle_enqueued: {} cycle: {}\n", NAME, __func__,
-               fill_mshr.instr_id, fill_mshr.address, fill_mshr.v_address, get_set_index(fill_mshr.address), way_idx,
-               access_type_names.at(champsim::to_underlying(fill_mshr.type)), fill_mshr.data_promise->pf_metadata,
-               (fill_mshr.time_enqueued.time_since_epoch()) / clock_period, (current_time.time_since_epoch()) / clock_period);
-  }
-
-  if (way != set_end && way->valid && way->dirty) {
-    request_type writeback_packet;
-
-    writeback_packet.cpu = fill_mshr.cpu;
-    writeback_packet.address = way->address;
-    writeback_packet.data = way->data;
-    writeback_packet.instr_id = fill_mshr.instr_id;
-    writeback_packet.ip = champsim::address{};
-    writeback_packet.type = access_type::WRITE;
-    writeback_packet.pf_metadata = way->pf_metadata;
-    writeback_packet.response_requested = false;
+  if(fill_mshr.type != access_type::DROPPED) {
+    // find victim
+    auto [set_begin, set_end] = get_set_span(fill_mshr.address);
+    auto way = std::find_if_not(set_begin, set_end, [](auto x) { return x.valid; });
+    if (way == set_end) {
+      way = std::next(set_begin, impl_find_victim(fill_mshr.cpu, fill_mshr.instr_id, get_set_index(fill_mshr.address), &*set_begin, fill_mshr.ip,
+                                                  fill_mshr.address, fill_mshr.type));
+    }
+    assert(set_begin <= way);
+    assert(way <= set_end);
+    assert(way != set_end || fill_mshr.type != access_type::WRITE); // Writes may not bypass
+    const auto way_idx = std::distance(set_begin, way);             // cast protected by earlier assertion
 
     if constexpr (champsim::debug_print) {
-      fmt::print("[{}] {} evict address: {:#x} v_address: {:#x} prefetch_metadata: {}\n", NAME, __func__, writeback_packet.address, writeback_packet.v_address,
-                 fill_mshr.data_promise->pf_metadata);
+      fmt::print("[{}] {} instr_id: {} address: {} v_address: {} set: {} way: {} type: {} prefetch_metadata: {} cycle_enqueued: {} cycle: {}\n", NAME, __func__,
+                fill_mshr.instr_id, fill_mshr.address, fill_mshr.v_address, get_set_index(fill_mshr.address), way_idx,
+                access_type_names.at(champsim::to_underlying(fill_mshr.type)), fill_mshr.data_promise->pf_metadata,
+                (fill_mshr.time_enqueued.time_since_epoch()) / clock_period, (current_time.time_since_epoch()) / clock_period);
     }
 
-    auto success = lower_level->add_wq(writeback_packet);
-    if (!success) {
-      return false;
+    if (way != set_end && way->valid && way->dirty) {
+      request_type writeback_packet;
+
+      writeback_packet.cpu = fill_mshr.cpu;
+      writeback_packet.address = way->address;
+      writeback_packet.data = way->data;
+      writeback_packet.instr_id = fill_mshr.instr_id;
+      writeback_packet.ip = champsim::address{};
+      writeback_packet.type = access_type::WRITE;
+      writeback_packet.pf_metadata = way->pf_metadata;
+      writeback_packet.response_requested = false;
+
+      if constexpr (champsim::debug_print) {
+        fmt::print("[{}] {} evict address: {:#x} v_address: {:#x} prefetch_metadata: {}\n", NAME, __func__, writeback_packet.address, writeback_packet.v_address,
+                  fill_mshr.data_promise->pf_metadata);
+      }
+
+      auto success = lower_level->add_wq(writeback_packet);
+      if (!success) {
+        return false;
+      }
+      sim_stats.downstream_packets.increment(std::pair{writeback_packet.type, writeback_packet.cpu});
     }
-    sim_stats.downstream_packets.increment(std::pair{writeback_packet.type, writeback_packet.cpu});
-  }
 
   champsim::address evicting_address{};
   if (way != set_end && way->valid) {
@@ -243,27 +250,32 @@ bool CACHE::handle_fill(const mshr_type& fill_mshr)
 
   auto metadata_thru = impl_prefetcher_cache_fill(module_address(fill_mshr), get_set_index(fill_mshr.address), way_idx,
                                                   (fill_mshr.type == access_type::PREFETCH), evicting_address, fill_mshr.data_promise->pf_metadata);
-  impl_replacement_cache_fill(fill_mshr.cpu, get_set_index(fill_mshr.address), way_idx, module_address(fill_mshr), fill_mshr.ip, evicting_address,
-                              fill_mshr.type);
+  
+    impl_replacement_cache_fill(fill_mshr.cpu, get_set_index(fill_mshr.address), way_idx, module_address(fill_mshr), fill_mshr.ip, evicting_address,
+                                fill_mshr.type);
 
-  if (way != set_end) {
-    if (way->valid && way->prefetch) {
-      ++sim_stats.pf_useless;
+    if (way != set_end) {
+      if (way->valid && way->prefetch) {
+        ++sim_stats.pf_useless;
+      }
+
+      if (fill_mshr.type == access_type::PREFETCH) {
+        ++sim_stats.pf_fill;
+      }
+
+      *way = fill_block(fill_mshr, metadata_thru);
     }
 
-    if (fill_mshr.type == access_type::PREFETCH) {
-      ++sim_stats.pf_fill;
-    }
+    // COLLECT STATS
+    sim_stats.total_miss_latency_cycles += (current_time - (fill_mshr.time_enqueued + clock_period)) / clock_period;
 
-    *way = fill_block(fill_mshr, metadata_thru);
+    response_type response{fill_mshr.back_off, fill_mshr.row_act, fill_mshr.type, fill_mshr.address, fill_mshr.v_address, fill_mshr.data_promise->data, metadata_thru, fill_mshr.instr_depend_on_me};
+    for (auto* ret : fill_mshr.to_return) {
+      ret->push_back(response);
+    }
   }
-
-  // COLLECT STATS
-  sim_stats.total_miss_latency_cycles += (current_time - (fill_mshr.time_enqueued + clock_period)) / clock_period;
-
-  response_type response{fill_mshr.address, fill_mshr.v_address, fill_mshr.data_promise->data, metadata_thru, fill_mshr.instr_depend_on_me};
-  for (auto* ret : fill_mshr.to_return) {
-    ret->push_back(response);
+  else if(fill_mshr.type == access_type::DROPPED) {
+    fmt::print("[{}] Dropped PREFETCH for {} from MSHR", NAME, fill_mshr.address);
   }
 
   return true;
@@ -304,10 +316,12 @@ bool CACHE::try_hit(const tag_lookup_type& handle_pkt)
   if (hit) {
     sim_stats.hits.increment(std::pair{handle_pkt.type, handle_pkt.cpu});
 
-    response_type response{handle_pkt.address, handle_pkt.v_address, way->data, metadata_thru, handle_pkt.instr_depend_on_me};
-    for (auto* ret : handle_pkt.to_return) {
-      ret->push_back(response);
-    }
+    //no response on promotion, if we hit then the prefetch is likely already headed upstream
+    response_type response{handle_pkt.back_off, handle_pkt.row_act, handle_pkt.type, handle_pkt.address, handle_pkt.v_address, way->data, metadata_thru, handle_pkt.instr_depend_on_me};
+    if(handle_pkt.type != access_type::PROMOTION)
+      for (auto* ret : handle_pkt.to_return) {
+        ret->push_back(response);
+      }
 
     way->dirty |= (handle_pkt.type == access_type::WRITE);
 
@@ -367,7 +381,18 @@ bool CACHE::handle_miss(const tag_lookup_type& handle_pkt)
 
   if (mshr_entry != MSHR.end()) // miss already inflight
   {
-    if (mshr_entry->type == access_type::PREFETCH && handle_pkt.type != access_type::PREFETCH) {
+    if (mshr_entry->type == access_type::PREFETCH && (handle_pkt.type != access_type::PREFETCH && handle_pkt.type != access_type::WRITE)) {
+      mshr_pkt.second.response_requested = true;
+      mshr_pkt.second.type = access_type::PROMOTION;
+      bool success = lower_level->add_rq(mshr_pkt.second);
+      if(!success)
+        return false;
+
+      sim_stats.downstream_packets.increment(std::pair{access_type::PROMOTION, handle_pkt.cpu});
+      //fmt::print("[{}] Issued promotion packet for {}\n",NAME,mshr_pkt.second.address);
+
+    }
+    if(mshr_entry->type == access_type::PREFETCH && handle_pkt.type != access_type::PREFETCH) {
       // Mark the prefetch as useful
       if (mshr_entry->prefetch_from_this) {
         ++sim_stats.pf_useful;
@@ -378,6 +403,13 @@ bool CACHE::handle_miss(const tag_lookup_type& handle_pkt)
   } else {
     if (mshr_full) { // not enough MSHR resource
       return false;  // TODO should we allow prefetches anyway if they will not be filled to this level?
+    }
+
+    //I think this is fine. Will need to check
+    if(handle_pkt.type == access_type::PROMOTION) {
+      //fmt::print("[{}] Promotion dropped for {}\n",NAME,mshr_pkt.second.address);
+      sim_stats.misses.increment(std::pair{handle_pkt.type, handle_pkt.cpu});
+      return true;
     }
 
     const bool send_to_rq = (prefetch_as_load || handle_pkt.type != access_type::PREFETCH);
@@ -440,6 +472,32 @@ auto CACHE::initiate_tag_check(champsim::channel* ul)
   };
 }
 
+void CACHE::manage_pq() {
+  // Check for PQ duplicates
+  for (auto pq_it = std::begin(internal_PQ); pq_it != std::end(internal_PQ);) {
+    if(pq_it->forward_checked) {
+      pq_it++;
+      continue;
+    }
+    
+    bool dupe = false;
+    for (auto pq_m = (pq_it + 1); pq_m != std::end(internal_PQ); pq_m++) {
+      if(champsim::block_number{pq_it->address} == champsim::block_number{pq_m->address}) {
+        if(pq_it->skip_fill == pq_m->skip_fill && pq_it->is_translated == pq_m->is_translated) {
+          dupe = true;
+          break;
+        }
+      }
+    }
+    if(!dupe) {
+      pq_it->forward_checked = true;
+      pq_it++;
+    } 
+    else {
+      pq_it = internal_PQ.erase(pq_it);
+    }
+  }
+}
 long CACHE::operate()
 {
   long progress{0};
@@ -454,6 +512,9 @@ long CACHE::operate()
   for (auto* ul : upper_levels) {
     ul->check_collision();
   }
+
+  //do internal PQ merges
+  manage_pq();
 
   // Finish returns
   std::for_each(std::cbegin(lower_level->returned), std::cend(lower_level->returned), [this](const auto& pkt) { this->finish_packet(pkt); });
@@ -511,11 +572,9 @@ long CACHE::operate()
     }
   }
 
-  auto temp_pq = internal_PQ.get();
   auto pq_bandwidth_consumed =
-      champsim::transform_while_n(temp_pq, std::back_inserter(inflight_tag_check), initiate_tag_bw, can_translate, initiate_tag_check<false>());
+      champsim::transform_while_n(internal_PQ, std::back_inserter(inflight_tag_check), initiate_tag_bw, can_translate, initiate_tag_check<false>());
   initiate_tag_bw.consume(pq_bandwidth_consumed);
-  internal_PQ.pop_n(pq_bandwidth_consumed);
 
   // Issue translations
   std::for_each(std::begin(inflight_tag_check), std::end(inflight_tag_check), [this](auto& x) { this->issue_translation(x); });
@@ -607,6 +666,10 @@ bool CACHE::prefetch_line(champsim::address pf_addr, bool fill_this_level, uint3
 {
   ++sim_stats.pf_requested;
 
+  if (std::size(internal_PQ) >= PQ_SIZE) {
+    return false;
+  }
+
   request_type pf_packet;
   pf_packet.type = access_type::PREFETCH;
   pf_packet.pf_metadata = prefetch_metadata;
@@ -615,12 +678,10 @@ bool CACHE::prefetch_line(champsim::address pf_addr, bool fill_this_level, uint3
   pf_packet.v_address = virtual_prefetch ? pf_addr : champsim::address{};
   pf_packet.is_translated = !virtual_prefetch;
 
-  bool success = internal_PQ.push({pf_packet, true, !fill_this_level},current_cycle());
+  internal_PQ.emplace_back(pf_packet, true, !fill_this_level);
+  ++sim_stats.pf_issued;
 
-  if(success)
-    ++sim_stats.pf_issued;
-
-  return success;
+  return true;
 }
 
 // LCOV_EXCL_START exclude deprecated function
@@ -641,18 +702,39 @@ void CACHE::finish_packet(const response_type& packet)
   auto mshr_entry = std::find_if(std::begin(MSHR), std::end(MSHR), matches_address(packet.address));
   auto first_unreturned = std::find_if(MSHR.begin(), MSHR.end(), [](auto x) { return x.data_promise.has_unknown_readiness(); });
 
+  bool expect_empty = packet.type == access_type::DROPPED || packet.type == access_type::PROMOTION || packet.type == access_type::PREFETCH;
   // sanity check
-  if (mshr_entry == MSHR.end()) {
+  if (mshr_entry == MSHR.end() && !expect_empty) {
     fmt::print(stderr, "[{}_MSHR] {} cannot find a matching entry! address: {} v_address: {}\n", NAME, __func__, packet.address, packet.v_address);
     assert(0);
   }
+  else if (mshr_entry == MSHR.end() || !mshr_entry->data_promise.has_unknown_readiness()) {
+    //packet returned to no open MSHR, go ahead and drop it.
+    /*
+    if(packet.type == access_type::DROPPED)
+      fmt::print("{} DROP arrived, but prefetch was promoted and filled already\n", NAME, packet.address);
+    else if(packet.type == access_type::PROMOTION)
+      fmt::print("{} PROMOTION returned (without success), but prefetch was filled already\n", NAME, packet.address);
+    else if(packet.type == access_type::PREFETCH)
+      fmt::print("{} PREFETCH returned, but PREFETCH was filled already by DEMAND\n", NAME, packet.address);
+    else
+      fmt::print("{} OTHER returned, but entry was already filled\n",NAME,packet.address);
+      */
+    return;
+  }
+  //Ignore drops if the prefetch was promoted
+  if(mshr_entry->type != access_type::PREFETCH && packet.type == access_type::DROPPED)
+    return;
+
+  sim_stats.returned_packets.increment(std::pair{packet.type, mshr_entry->cpu});
 
   // MSHR holds the most updated information about this request
   mshr_type::returned_value finished_value{packet.data, packet.pf_metadata};
   mshr_entry->data_promise = champsim::waitable{finished_value, current_time + (warmup ? champsim::chrono::clock::duration{} : FILL_LATENCY)};
-
-  mshr_entry->back_off = packet.back_off;
-  mshr_entry->row_act = packet.row_act;
+  mshr_entry->back_off |= packet.back_off;
+  mshr_entry->row_act |= packet.row_act;
+  if(packet.type == access_type::DROPPED)
+    mshr_entry->type = access_type::DROPPED;
 
   if constexpr (champsim::debug_print) {
     fmt::print("[{}_MSHR] finish_packet instr_id: {} address: {} data: {} type: {} current: {}\n", this->NAME, mshr_entry->instr_id, mshr_entry->address,
@@ -743,7 +825,7 @@ std::vector<std::size_t> CACHE::get_pq_occupancy() const
 {
   std::vector<std::size_t> retval;
   std::transform(std::begin(upper_levels), std::end(upper_levels), std::back_inserter(retval), [](auto ulptr) { return ulptr->pq_occupancy(); });
-  retval.push_back(internal_PQ.get_size());
+  retval.push_back(std::size(internal_PQ));
   return retval;
 }
 
@@ -900,11 +982,12 @@ void CACHE::end_phase(unsigned finished_cpu)
 {
   roi_stats.total_miss_latency_cycles = sim_stats.total_miss_latency_cycles;
 
-  for (auto type : {access_type::LOAD, access_type::RFO, access_type::PREFETCH, access_type::WRITE, access_type::TRANSLATION}) {
+  for (auto type : {access_type::LOAD, access_type::RFO, access_type::PREFETCH, access_type::WRITE, access_type::TRANSLATION, access_type::PROMOTION, access_type::DROPPED}) {
     std::pair key{type, finished_cpu};
     roi_stats.hits.set(key, sim_stats.hits.value_or(key, 0));
     roi_stats.misses.set(key, sim_stats.misses.value_or(key, 0));
     roi_stats.downstream_packets.set(key,sim_stats.downstream_packets.value_or(key,0));
+    roi_stats.returned_packets.set(key,sim_stats.returned_packets.value_or(key,0));
   }
 
   roi_stats.pf_requested = sim_stats.pf_requested;

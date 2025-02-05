@@ -64,7 +64,7 @@ bool do_collision_for_return(Iter begin, Iter end, champsim::channel::request_ty
 {
   return do_collision_for(begin, end, packet, shamt, [&](champsim::channel::request_type& source, champsim::channel::request_type& destination) {
     if (source.response_requested) {
-      returned.emplace_back(source.address, source.v_address, destination.data, destination.pf_metadata, source.instr_depend_on_me);
+      returned.emplace_back(source.back_off, source.row_act, source.type, source.address, source.v_address, destination.data, destination.pf_metadata, source.instr_depend_on_me);
     }
   });
 }
@@ -94,15 +94,34 @@ void champsim::channel::check_collision()
       sim_stats.RQ_MERGED++;
       rq_it = RQ.erase(rq_it);
     } else {
+
+      //now that we have one, check PQ for matches
+      for (auto pq_it = std::begin(PQ); pq_it != std::end(PQ);) {
+        if((rq_it->address.slice_upper(read_shamt) == pq_it->address.slice_upper(read_shamt)) && (rq_it->is_translated == pq_it->is_translated)) {
+          //merge returns for PQ into RQ
+          rq_it->response_requested |= pq_it->response_requested;
+          auto instr_copy = std::move(rq_it->instr_depend_on_me);
+          std::set_union(std::begin(instr_copy), std::end(instr_copy), std::begin(pq_it->instr_depend_on_me), std::end(pq_it->instr_depend_on_me),
+                std::back_inserter(rq_it->instr_depend_on_me));
+          //drop PQ
+          pq_it = PQ.erase(pq_it);
+        }
+        else
+          pq_it++;
+      }
       rq_it->forward_checked = true;
       ++rq_it;
     }
   }
 
   // Check PQ for forwarding from WQ (return if found), then for duplicates (merge if found)
+  // Added PQ forwarding from RQ as well
   for (auto pq_it = std::find_if(std::begin(PQ), std::end(PQ), std::not_fn(&request_type::forward_checked)); pq_it != std::end(PQ);) {
     if (do_collision_for_return(std::begin(WQ), std::end(WQ), *pq_it, write_shamt, returned)) {
       sim_stats.WQ_FORWARD++;
+      pq_it = PQ.erase(pq_it);
+    } else if (do_collision_for_return(std::begin(RQ), std::end(RQ), *pq_it, read_shamt, returned)) {
+      sim_stats.RQ_MERGED++;
       pq_it = PQ.erase(pq_it);
     } else if (do_collision_for_merge(std::begin(PQ), pq_it, *pq_it, read_shamt)) {
       sim_stats.PQ_MERGED++;
@@ -112,6 +131,7 @@ void champsim::channel::check_collision()
       ++pq_it;
     }
   }
+
 }
 
 template <typename R>

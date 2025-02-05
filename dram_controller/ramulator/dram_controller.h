@@ -63,11 +63,13 @@ public:
 
     bool receive_external_requests(int req_type_id, Addr_t addr, int source_id, std::function<void(Request&)> callback) override {
       if(req_type_id == (int)access_type::PREFETCH)
-        return m_memory_system->send({addr,Ramulator::Request::Type::Read,source_id,true,callback});
+        return m_memory_system->send({addr,Ramulator::Request::Type::Read,source_id,true,false,callback});
       else if(req_type_id == (int)access_type::WRITE)
-        return m_memory_system->send({addr,Ramulator::Request::Type::Write,source_id,false,callback});
+        return m_memory_system->send({addr,Ramulator::Request::Type::Write,source_id,false,false,callback});
+      else if(req_type_id == (int)access_type::PROMOTION)
+        return m_memory_system->send({addr,Ramulator::Request::Type::Read,source_id,false,true,callback});
       else
-        return m_memory_system->send({addr,Ramulator::Request::Type::Read,source_id,false,callback});
+        return m_memory_system->send({addr,Ramulator::Request::Type::Read,source_id,false,false,callback});
     }
 
     int get_num_cores() { return (int)NUM_CPUS; };
@@ -96,6 +98,7 @@ struct DRAM_CHANNEL final : public champsim::operable {
 
     uint32_t pf_metadata = 0;
 
+    access_type type{access_type::LOAD};
     champsim::address address{};
     champsim::address v_address{};
     champsim::address data{};

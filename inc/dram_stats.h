@@ -10,6 +10,8 @@ struct dram_stats {
   uint64_t dbus_count_congested = 0;
   uint64_t refresh_cycles = 0;
   unsigned WQ_ROW_BUFFER_HIT = 0, WQ_ROW_BUFFER_MISS = 0, RQ_ROW_BUFFER_HIT = 0, RQ_ROW_BUFFER_MISS = 0, WQ_FULL = 0;
+  unsigned PF_DROPPED = 0;
+  unsigned PF_PROMOTED = 0;
 };
 
 dram_stats operator-(dram_stats lhs, dram_stats rhs);

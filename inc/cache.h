@@ -53,38 +53,10 @@ template<typename T>
 class TemporalMergeQueue {
   private:
   std::vector<T> queue;
-  std::vector<uint64_t> timestamps;
   std::size_t max;
   std::size_t size;
   constexpr static std::size_t RAF_FILTER_SETS = 8;
   constexpr static std::size_t RAF_FILTER_WAYS = 16;
-  uint64_t timeout = 1500;
-
-  struct raf_entry {
-      T entry;
-      uint64_t first_accessed;
-
-      raf_entry() : raf_entry(T{},0) {}
-      explicit raf_entry(T entry_, uint64_t first_accessed_) : entry(entry_), first_accessed(first_accessed_) {}
-  };
-  struct raf_indexer {
-      auto operator()(const raf_entry& entry) const {return (champsim::block_number{entry.entry.address}.to<uint64_t>() << 1) | entry.entry.skip_fill;}
-  };
-
-  champsim::msl::lru_table<raf_entry, raf_indexer, raf_indexer> raf_filter{RAF_FILTER_SETS,RAF_FILTER_WAYS};
-
-  bool check_raf(T entry, uint64_t check_time) {
-  	auto raf_filter_entry = raf_filter.check_hit(raf_entry{entry,0});
-  	bool should_drop = false;
-  	if(raf_filter_entry.has_value()) {
-		if(check_time - raf_filter_entry->first_accessed < timeout)
-			should_drop = true;
-	}
-	return should_drop;
-  }
-  void fill_raf(T entry, uint64_t check_time) {
-	raf_filter.fill(raf_entry{entry,check_time});
-  }
 
   public:
 
@@ -92,14 +64,11 @@ class TemporalMergeQueue {
       this->queue = std::move(other.queue);
       this->max = other.max;
       this->size = other.size;
-      this->timeout = other.timeout;
 
       return *this;
     }
 
-    TemporalMergeQueue(std::size_t max_) : max(max_),  queue(max_,T{}), timestamps(max_,0), size(0) {}
-
-    void set_timeout(uint64_t timeout_) {timeout = timeout_;};
+    TemporalMergeQueue(std::size_t max_) : max(max_),  queue(max_,T{}), size(0) {}
 
     bool is_empty() {
       return(size == 0);
@@ -119,24 +88,15 @@ class TemporalMergeQueue {
     void pop() {
       //assert that queue isn't empty
       assert(size != 0);
-      
-      //add to raf
-      //fill_raf(queue.at(0),timestamps.at(0));
-
       size--;
       std::rotate(queue.begin(), queue.begin() + 1,queue.end());
-      std::rotate(timestamps.begin(), timestamps.begin() + 1, timestamps.end());
     }
 
     void pop_n(std::size_t n) {
       assert(size >= n);
       size -= n;
       
-      //for(std::size_t i = 0; i < n; i++) {
-	    //  fill_raf(queue.at(i),timestamps.at(i));
-      //}
       std::rotate(queue.begin(),queue.begin() + n, queue.end());
-      std::rotate(timestamps.begin(), timestamps.begin() + n, timestamps.end());
     }
 
     bool push(T entry, uint64_t timestamp) {
@@ -149,10 +109,6 @@ class TemporalMergeQueue {
           return true;
         }
       }
-      
-      //check raf filter
-      //if(check_raf(entry,timestamp))
-      //  return true;
 
       //couldn't merge? now check to see if full.
       if(size == max)
@@ -160,7 +116,6 @@ class TemporalMergeQueue {
 
       //insert into queue, couldn't merge
       queue.at(size) = entry;
-      timestamps.at(size) = timestamp;
       size++;
       return true;
     }
@@ -197,6 +152,7 @@ class CACHE : public champsim::operable
     bool translate_issued = false;
     bool back_off = false;
     bool row_act = false;
+    bool forward_checked = false;
 
     uint8_t asid[2] = {std::numeric_limits<uint8_t>::max(), std::numeric_limits<uint8_t>::max()};
 
@@ -282,7 +238,7 @@ private:
   std::deque<tag_lookup_type> translation_stash{};
 
 public:
-  TemporalMergeQueue<tag_lookup_type> internal_PQ;
+  std::deque<tag_lookup_type> internal_PQ;
   std::vector<channel_type*> upper_levels;
   channel_type* lower_level;
   channel_type* lower_translate;
@@ -308,6 +264,7 @@ public:
   std::deque<mshr_type> MSHR;
   std::deque<mshr_type> inflight_writes;
 
+  void manage_pq();
   long operate() final;
   void initialize() final;
   void begin_phase() final;

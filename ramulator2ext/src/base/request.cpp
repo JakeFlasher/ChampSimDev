@@ -9,7 +9,7 @@ Request::Request(AddrVec_t addr_vec, int type): addr_vec(addr_vec), type_id(type
 Request::Request(Addr_t addr, int type, int source_id, std::function<void(Request&)> callback):
 addr(addr), type_id(type), source_id(source_id), callback(callback) {};
 
-Request::Request(Addr_t addr, int type, int source_id, bool prefetch, std::function<void(Request&)> callback):
-addr(addr), type_id(type), source_id(source_id), is_prefetch(prefetch), callback(callback) {};
+Request::Request(Addr_t addr, int type, int source_id, bool prefetch, bool promotion, std::function<void(Request&)> callback):
+addr(addr), type_id(type), source_id(source_id), is_prefetch(prefetch), is_promotion(promotion), callback(callback) {};
 
 }        // namespace Ramulator
