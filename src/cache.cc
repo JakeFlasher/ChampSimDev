@@ -729,10 +729,12 @@ void CACHE::finish_packet(const response_type& packet)
     else
       fmt::print("{} OTHER returned {}, but entry was already filled\n",NAME,packet.address);
     */
+    sim_stats.returned_packets.increment(std::pair{packet.type, 0});
     return;
   }
   //Ignore drops if the prefetch was promoted
   if(mshr_entry->type != access_type::PREFETCH && packet.type == access_type::DROPPED) {
+    sim_stats.returned_packets.increment(std::pair{packet.type, 0});
     //fmt::print("{} Ignoring drop for {}, but promotion packet should be in-flight\n",NAME,packet.address);
     return;
   }
