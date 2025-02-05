@@ -144,6 +144,17 @@ class PRADRAMController final : public IBHDRAMController, public Implementation 
         //fmt::print("\tCouldn't find one\n");
       }
 
+      //if is a prefetch, go ahead and drop half according to their arrival cycle
+      /*
+      if(req.is_prefetch) {
+        if (m_clk % 2) {
+          req.was_dropped = true;
+          pending.push_back(req);
+          return true;
+        }
+      }
+      */
+
       // Else, enqueue them to corresponding buffer based on request type id
       bool is_success = false;
       req.arrive = m_clk;

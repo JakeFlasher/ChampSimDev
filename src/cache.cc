@@ -123,7 +123,7 @@ CACHE::mshr_type CACHE::mshr_type::merge(mshr_type predecessor, mshr_type succes
 
   mshr_type retval{successor.type == access_type::PREFETCH ? predecessor : successor};
   if(successor.type == access_type::PREFETCH) {
-    retval.type = predecessor.type;
+    retval.type = predecessor.type;// == access_type::PREFETCH && !successor.prefetch_from_this ? access_type::PROMOTION : predecessor.type; 
   }
   else {
     retval.type = successor.type;
@@ -275,7 +275,16 @@ bool CACHE::handle_fill(const mshr_type& fill_mshr)
     }
   }
   else if(fill_mshr.type == access_type::DROPPED) {
-    fmt::print("[{}] Dropped PREFETCH for {} from MSHR", NAME, fill_mshr.address);
+    //fmt::print("[{}] Dropped PREFETCH for {} from MSHR\n", NAME, fill_mshr.address);
+    auto [set_begin, set_end] = get_set_span(fill_mshr.address);
+    auto way_idx = std::distance(set_begin, set_end);
+    auto metadata_thru = impl_prefetcher_cache_fill(module_address(fill_mshr), get_set_index(fill_mshr.address), way_idx,
+                                                  (fill_mshr.type == access_type::PREFETCH), champsim::address{}, fill_mshr.data_promise->pf_metadata);
+    response_type response{fill_mshr.back_off, fill_mshr.row_act, fill_mshr.type, fill_mshr.address, fill_mshr.v_address, fill_mshr.data_promise->data, metadata_thru, fill_mshr.instr_depend_on_me};
+    for (auto* ret : fill_mshr.to_return) {
+      //fmt::print("\tSending response...\n");
+      ret->push_back(response);
+    }
   }
 
   return true;
@@ -381,7 +390,7 @@ bool CACHE::handle_miss(const tag_lookup_type& handle_pkt)
 
   if (mshr_entry != MSHR.end()) // miss already inflight
   {
-    if (mshr_entry->type == access_type::PREFETCH && (handle_pkt.type != access_type::PREFETCH && handle_pkt.type != access_type::WRITE)) {
+    if (mshr_entry->type == access_type::PREFETCH && ((handle_pkt.type != access_type::PREFETCH /*|| !handle_pkt.prefetch_from_this*/) && handle_pkt.type != access_type::WRITE)) {
       mshr_pkt.second.response_requested = true;
       mshr_pkt.second.type = access_type::PROMOTION;
       bool success = lower_level->add_rq(mshr_pkt.second);
@@ -406,11 +415,11 @@ bool CACHE::handle_miss(const tag_lookup_type& handle_pkt)
     }
 
     //I think this is fine. Will need to check
-    if(handle_pkt.type == access_type::PROMOTION) {
+    //if(handle_pkt.type == access_type::PROMOTION && handle_pkt.prefetch_from_this) {
       //fmt::print("[{}] Promotion dropped for {}\n",NAME,mshr_pkt.second.address);
-      sim_stats.misses.increment(std::pair{handle_pkt.type, handle_pkt.cpu});
-      return true;
-    }
+    //  sim_stats.misses.increment(std::pair{handle_pkt.type, handle_pkt.cpu});
+    //  return true;
+    //}
 
     const bool send_to_rq = (prefetch_as_load || handle_pkt.type != access_type::PREFETCH);
     bool success = send_to_rq ? lower_level->add_rq(mshr_pkt.second) : lower_level->add_pq(mshr_pkt.second);
@@ -712,19 +721,21 @@ void CACHE::finish_packet(const response_type& packet)
     //packet returned to no open MSHR, go ahead and drop it.
     /*
     if(packet.type == access_type::DROPPED)
-      fmt::print("{} DROP arrived, but prefetch was promoted and filled already\n", NAME, packet.address);
+      fmt::print("{} DROP arrived {} , but prefetch was promoted and filled already\n", NAME, packet.address);
     else if(packet.type == access_type::PROMOTION)
-      fmt::print("{} PROMOTION returned (without success), but prefetch was filled already\n", NAME, packet.address);
+      fmt::print("{} PROMOTION returned {} (without success), but prefetch was filled already\n", NAME, packet.address);
     else if(packet.type == access_type::PREFETCH)
-      fmt::print("{} PREFETCH returned, but PREFETCH was filled already by DEMAND\n", NAME, packet.address);
+      fmt::print("{} PREFETCH returned {}, but PREFETCH was filled already by DEMAND\n", NAME, packet.address);
     else
-      fmt::print("{} OTHER returned, but entry was already filled\n",NAME,packet.address);
-      */
+      fmt::print("{} OTHER returned {}, but entry was already filled\n",NAME,packet.address);
+    */
     return;
   }
   //Ignore drops if the prefetch was promoted
-  if(mshr_entry->type != access_type::PREFETCH && packet.type == access_type::DROPPED)
+  if(mshr_entry->type != access_type::PREFETCH && packet.type == access_type::DROPPED) {
+    //fmt::print("{} Ignoring drop for {}, but promotion packet should be in-flight\n",NAME,packet.address);
     return;
+  }
 
   sim_stats.returned_packets.increment(std::pair{packet.type, mshr_entry->cpu});
 
