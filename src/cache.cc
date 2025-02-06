@@ -325,12 +325,10 @@ bool CACHE::try_hit(const tag_lookup_type& handle_pkt)
   if (hit) {
     sim_stats.hits.increment(std::pair{handle_pkt.type, handle_pkt.cpu});
 
-    //no response on promotion, if we hit then the prefetch is likely already headed upstream
     response_type response{handle_pkt.back_off, handle_pkt.row_act, handle_pkt.type, handle_pkt.address, handle_pkt.v_address, way->data, metadata_thru, handle_pkt.instr_depend_on_me};
-    if(handle_pkt.type != access_type::PROMOTION)
-      for (auto* ret : handle_pkt.to_return) {
-        ret->push_back(response);
-      }
+    for (auto* ret : handle_pkt.to_return) {
+      ret->push_back(response);
+    }
 
     way->dirty |= (handle_pkt.type == access_type::WRITE);
 
