@@ -669,6 +669,41 @@ long CACHE::invalidate_entry(champsim::address inval_addr)
   return std::distance(begin, inv_way);
 }
 
+std::pair<bool, long> CACHE::early_writeback(champsim::address wb_addr, uint32_t wb_cpu) {
+  auto [begin, end] = get_set_span(wb_addr);
+  auto wb_way = std::find_if(begin,end,matches_address(wb_addr));
+
+  bool success = false;
+  if(wb_way != end) {
+    if(wb_way->dirty) {
+      wb_way->dirty = false;
+      request_type writeback_packet;
+
+      writeback_packet.cpu = wb_cpu;
+      writeback_packet.address = wb_way->address;
+      writeback_packet.data = wb_way->data;
+      writeback_packet.instr_id = 0;
+      writeback_packet.ip = champsim::address{};
+      writeback_packet.type = access_type::WRITE;
+      writeback_packet.pf_metadata = wb_way->pf_metadata;
+      writeback_packet.response_requested = false;
+
+      if constexpr (champsim::debug_print) {
+        fmt::print("[{}] {} writeback address: {:#x} v_address: {:#x} prefetch_metadata: {}\n", NAME, __func__, writeback_packet.address, writeback_packet.v_address,
+                  writeback_packet.pf_metadata);
+      }
+
+      auto wb_success = lower_level->add_wq(writeback_packet);
+      if (wb_success) {
+        success = true;
+        sim_stats.downstream_packets.increment(std::pair{writeback_packet.type, writeback_packet.cpu});
+      }
+    }
+  }
+
+  return std::pair<bool,long>{success,std::distance(begin, wb_way)};
+}
+
 bool CACHE::prefetch_line(champsim::address pf_addr, bool fill_this_level, uint32_t prefetch_metadata)
 {
   ++sim_stats.pf_requested;
@@ -728,6 +763,7 @@ void CACHE::finish_packet(const response_type& packet)
       fmt::print("{} OTHER returned {}, but entry was already filled\n",NAME,packet.address);
     */
     sim_stats.returned_packets.increment(std::pair{packet.type, 0});
+    sim_stats.pr_missed++;
     return;
   }
   //Ignore drops if the prefetch was promoted
@@ -1006,6 +1042,7 @@ void CACHE::end_phase(unsigned finished_cpu)
   roi_stats.pf_useful = sim_stats.pf_useful;
   roi_stats.pf_useless = sim_stats.pf_useless;
   roi_stats.pf_fill = sim_stats.pf_fill;
+  roi_stats.pr_missed = sim_stats.pr_missed;
 
   for (auto* ul : upper_levels) {
     ul->roi_stats.RQ_ACCESS = ul->sim_stats.RQ_ACCESS;

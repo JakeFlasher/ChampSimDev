@@ -303,6 +303,8 @@ public:
   [[deprecated("This function should not be used to access the blocks directly.")]] [[nodiscard]] uint64_t get_way(uint64_t address, uint64_t set) const;
 
   long invalidate_entry(champsim::address inval_addr);
+  std::pair<bool,long> early_writeback(champsim::address wb_addr, uint32_t wb_cpu);
+
   bool prefetch_line(champsim::address pf_addr, bool fill_this_level, uint32_t prefetch_metadata);
 
   [[deprecated]] bool prefetch_line(uint64_t pf_addr, bool fill_this_level, uint32_t prefetch_metadata);

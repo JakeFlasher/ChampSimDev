@@ -51,6 +51,7 @@ void to_json(nlohmann::json& j, const CACHE::stats_type& stats)
   statsmap.emplace("prefetch issued", stats.pf_issued);
   statsmap.emplace("useful prefetch", stats.pf_useful);
   statsmap.emplace("useless prefetch", stats.pf_useless);
+  statsmap.emplace("missed promotion", stats.pr_missed);
   statsmap.emplace("miss latency", std::ceil(stats.total_miss_latency_cycles) / std::ceil(stats.misses.total()));
   for (const auto type : {access_type::LOAD, access_type::RFO, access_type::PREFETCH, access_type::WRITE, access_type::TRANSLATION, access_type::PROMOTION, access_type::DROPPED}) {
     std::vector<hits_value_type> hits;

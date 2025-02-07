@@ -225,6 +225,7 @@ void MEMORY_CONTROLLER::return_packet_rq_rr(Ramulator::Request& req, DRAM_CHANNE
     assert(pkt.type == access_type::PREFETCH);
   }
   if(req.was_promoted) {
+    response.type = access_type::PROMOTION;
     channels[dram_get_channel(pkt.address)].sim_stats.PF_PROMOTED += 1;
     assert(pkt.type == access_type::PREFETCH);
   }

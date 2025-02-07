@@ -104,6 +104,7 @@ void champsim::channel::check_collision()
           std::set_union(std::begin(instr_copy), std::end(instr_copy), std::begin(pq_it->instr_depend_on_me), std::end(pq_it->instr_depend_on_me),
                 std::back_inserter(rq_it->instr_depend_on_me));
           //drop PQ
+          rq_it->type = access_type::PROMOTION;
           pq_it = PQ.erase(pq_it);
         }
         else
