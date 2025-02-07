@@ -79,9 +79,9 @@ std::vector<std::string> champsim::plain_printer::format(CACHE::stats_type stats
     }
   }
 
-  uint64_t issued_promotions = 0;
+  uint64_t returned_promotions = 0;
   for(std::size_t cpu = 0; cpu < NUM_CPUS; ++cpu) {
-    issued_promotions += stats.downstream_packets.value_or(std::pair{access_type::PROMOTION,cpu},downstream_value_type{});
+    returned_promotions += stats.returned_packets.value_or(std::pair{access_type::PROMOTION,cpu},returned_value_type{});
   }
 
   std::vector<std::string> lines{};
@@ -105,7 +105,7 @@ std::vector<std::string> champsim::plain_printer::format(CACHE::stats_type stats
     lines.push_back(fmt::format("{} PREFETCH REQUESTED: {:10} ISSUED: {:10} USEFUL: {:10} USELESS: {:10}", stats.name, stats.pf_requested, stats.pf_issued,
                                 stats.pf_useful, stats.pf_useless));
     
-    lines.push_back(fmt::format("{} PROMOTIONS ISSUED: {:10} MISSED: {:10}", stats.name, issued_promotions, stats.pr_missed));                         
+    lines.push_back(fmt::format("{} PROMOTIONS RETURNED: {:10} MISSED: {:10}", stats.name, returned_promotions, stats.pr_missed));                         
 
     lines.push_back(
           fmt::format("{} DOWNSTREAM PACKETS: {:10} LOAD: {:10} RFO: {:10} PREFETCH: {:10} WRITE: {:10} TRANSLATION: {:10} PROMOTION: {:10} DROPPED: {:10}",
